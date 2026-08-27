@@ -5,12 +5,11 @@ import { copyText, downloadFile, money } from '../lib/format.js'
 import { configErrors } from '../lib/github.js'
 import RestorePanel from './RestorePanel.jsx'
 import { pathForYear } from '../lib/storage.js'
+import { backupFilename, backupMessage, backupText } from '../lib/backup.js'
 import { budgetCSV } from '../lib/summary.js'
 import { validateData } from '../lib/model.js'
 
-const backupText = (data) => JSON.stringify({ ...data, exportedAt: new Date().toISOString() }, null, 2)
-
-export default function DataTab({ data, sync, token, syncStatus, actions }) {
+export default function DataTab({ data, sync, token, syncStatus, actions, backup }) {
   const [preview, setPreview] = useState(null)
   const [copied, setCopied] = useState(false)
   const [pasted, setPasted] = useState('')
@@ -40,9 +39,12 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
 
   const exportBackup = () => {
     const text = backupText(data)
-    const filename = `budget-backup-${new Date().toISOString().slice(0, 10)}.json`
+    const filename = backupFilename(data.year)
     downloadFile(filename, text, 'application/json')
-    openPreview({ title: 'Full backup (JSON)', filename, text, mime: 'application/json' })
+    // Only the full backup counts as a backup. The CSV is for reading, not
+    // for restoring, and calling it one would be the lie that matters here.
+    actions.recordBackup()
+    openPreview({ title: `Full backup — ${data.year}`, filename, text, mime: 'application/json' })
   }
 
   const importFrom = (text, source) => {
@@ -115,14 +117,23 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
       </div>
 
       <div className="panel">
-        <h2>Export</h2>
+        <h2>Export &amp; off-GitHub backup</h2>
+        <p className={`note${backup.status === 'fresh' ? '' : ' err'}`} style={{ marginTop: -6, marginBottom: 12 }}>
+          {backupMessage(backup, data.year)}
+        </p>
         <div className="row" style={{ gap: 10 }}>
+          <button className={backup.status === 'fresh' ? '' : 'primary'} onClick={exportBackup}>
+            Full backup (JSON)
+          </button>
           <button onClick={exportCSV}>Budget CSV ({data.year})</button>
-          <button onClick={exportBackup}>Full backup (JSON)</button>
         </div>
         <p className="small muted" style={{ marginBottom: 0 }}>
-          Both download straight to your device. The text also opens in a window you can copy
-          from, which is the reliable path on iPad.
+          Save the JSON somewhere that is not GitHub — Files, iCloud, a Drive folder, an email to
+          yourself. The repo's history covers an accident, but not the account going away, and not
+          someone holding the token: <strong>Contents: write also grants force-push</strong>, so a
+          stolen token can rewrite the history that Restore reads from. A copy off GitHub is the
+          only thing outside that blast radius. Import it back from the panel below. The CSV is
+          for reading in a spreadsheet and cannot be restored, so it does not count as a backup.
         </p>
       </div>
 

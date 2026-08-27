@@ -4,6 +4,7 @@ import YearsTab from './components/YearsTab.jsx'
 import BudgetGrid from './components/BudgetGrid.jsx'
 import DataTab from './components/DataTab.jsx'
 import Toast from './components/Toast.jsx'
+import Modal from './components/Modal.jsx'
 import { configErrors } from './lib/github.js'
 import {
   copyLayer, fillRow, makeCategory, makeItem, nowISO, setCell, setItemField, toCell,
@@ -16,6 +17,7 @@ import { itemsOf } from './lib/summary.js'
 import { ensureCatchAll } from './lib/statement.js'
 import { addTransaction, removeTransaction } from './lib/ledger.js'
 import { pullMerged, pushMerged } from './lib/sync.js'
+import { backupState, recordBackup } from './lib/backup.js'
 import { decryptToken, encryptToken, makeSetupCode, readSetupCode } from './lib/crypto.js'
 import {
   loadLocal, loadPrefs, loadSessionToken, loadSyncConfig, loadActiveYear,
@@ -66,11 +68,14 @@ export default function App() {
   const [tab, setTab] = useState('summary')
   const [prefs, setPrefs] = useState(loadPrefs)
   const [toast, setToast] = useState(null)
+  // A merge that would destroy waits here for a decision rather than landing.
+  const [pendingMerge, setPendingMerge] = useState(null)
 
   const themeChoice = THEMES.includes(prefs.theme) ? prefs.theme : 'system'
   const [resolvedTheme, setResolvedTheme] = useState(() => resolveTheme(themeChoice))
   const layer = prefs.layer === 'actual' || prefs.layer === 'variance' ? prefs.layer : 'planned'
   const collapsed = prefs.collapsed || {}
+  const backup = backupState(prefs, year)
 
   // Mirrors `data` so the action callbacks can read current state without
   // being rebuilt on every keystroke, and without side effects in a setState
@@ -169,9 +174,14 @@ export default function App() {
     setSyncStatus({ busy: true, message: 'Pulling…', error: '' })
     try {
       const before = dataRef.current
-      const { merged, existed } = await pullMerged(config, before)
+      const { merged, existed, blocked, losses } = await pullMerged(config, before)
       if (!existed) {
         setSyncStatus({ busy: false, message: 'No file there yet — push to create it.', error: '' })
+        return
+      }
+      if (blocked) {
+        setPendingMerge({ kind: 'pull', merged, losses })
+        setSyncStatus({ busy: false, message: '', error: '' })
         return
       }
       applyMerged(merged, describe(before, merged))
@@ -181,13 +191,19 @@ export default function App() {
     }
   }, [applyMerged, activeConfig])
 
-  const push = useCallback(async () => {
+  const push = useCallback(async (options = {}) => {
     const config = activeConfig()
     if (configErrors(config).length) return
     setSyncStatus({ busy: true, message: 'Pushing…', error: '' })
     try {
       // Merged, not local: the file may hold edits this device has never seen.
-      const { merged } = await pushMerged(config, dataRef.current)
+      const { merged, blocked, losses } = await pushMerged(config, dataRef.current, undefined, options)
+      if (blocked) {
+        // Nothing was written. The decision comes first.
+        setPendingMerge({ kind: 'push', merged, losses })
+        setSyncStatus({ busy: false, message: '', error: '' })
+        return
+      }
       applyMerged(merged)
       setSyncStatus({ busy: false, message: `Pushed at ${new Date().toLocaleTimeString()}.`, error: '' })
     } catch (e) {
@@ -200,9 +216,12 @@ export default function App() {
   useEffect(() => {
     if (skipFirstAutoPush.current) { skipFirstAutoPush.current = false; return }
     if (!sync.autoPush || configErrors({ ...sync, token }).length) return
-    const t = setTimeout(push, AUTOPUSH_DEBOUNCE_MS)
+    // A blocked merge is waiting on the user. Retrying it on a timer would
+    // reopen the same dialog every few seconds and train them to dismiss it.
+    if (pendingMerge) return
+    const t = setTimeout(() => push(), AUTOPUSH_DEBOUNCE_MS)
     return () => clearTimeout(t)
-  }, [data, sync, token, push])
+  }, [data, sync, token, push, pendingMerge])
 
   // --- data actions --------------------------------------------------------
 
@@ -381,6 +400,13 @@ export default function App() {
 
       setSync: setSyncField,
 
+      /**
+       * Stamp this year as having a copy that is not on GitHub. Tracked per
+       * year and per device, because that is what a backup file actually is —
+       * one year, saved on one machine.
+       */
+      recordBackup: () => setPrefs((p) => recordBackup(p, dataRef.current.year)),
+
       /** Encrypt the token under a passphrase and keep it unlocked for this tab. */
       saveToken: async (raw, passphrase) => {
         try {
@@ -523,7 +549,13 @@ export default function App() {
       )}
 
       {tab === 'summary' && (
-        <SummaryTab data={data} layer={layer === 'variance' ? 'planned' : layer} theme={resolvedTheme} />
+        <SummaryTab
+          data={data}
+          layer={layer === 'variance' ? 'planned' : layer}
+          theme={resolvedTheme}
+          backup={backup}
+          onGoToBackup={() => setTab('data')}
+        />
       )}
 
       {(tab === 'expenses' || tab === 'income') && (
@@ -551,7 +583,53 @@ export default function App() {
       )}
 
       {tab === 'data' && (
-        <DataTab data={data} sync={sync} token={token} syncStatus={syncStatus} actions={actions} />
+        <DataTab
+          data={data} sync={sync} token={token} syncStatus={syncStatus}
+          actions={actions} backup={backup}
+        />
+      )}
+
+      {pendingMerge && (
+        <Modal
+          title="This sync would remove data"
+          subtitle={
+            pendingMerge.kind === 'push'
+              ? 'Nothing has been written to GitHub. Decide first.'
+              : 'Nothing on this device has changed yet.'
+          }
+          onClose={() => setPendingMerge(null)}
+        >
+          <p className="small">
+            The file on GitHub says these rows were deleted, so merging it would take them off
+            this device too:
+          </p>
+          <ul className="small">
+            {pendingMerge.losses.map((loss) => (
+              <li key={loss.key}>
+                <strong>{loss.label}</strong> — {loss.before} here, {loss.after} after merging
+              </li>
+            ))}
+          </ul>
+          <p className="small muted">
+            If you deleted them yourself on another device, this is expected — go ahead. If you
+            did not, do <strong>not</strong> continue: keep what is on this device, then open
+            Restore from history on the Setup &amp; Sync tab and put an earlier version back.
+          </p>
+          <div className="row" style={{ marginTop: 12, gap: 10 }}>
+            <button onClick={() => setPendingMerge(null)}>Keep this device's data</button>
+            <button
+              className="danger"
+              onClick={() => {
+                const { kind, merged } = pendingMerge
+                setPendingMerge(null)
+                if (kind === 'pull') applyMerged(merged, 'Merged changes from GitHub.')
+                else push({ allowDestructive: true })
+              }}
+            >
+              I deleted them — continue
+            </button>
+          </div>
+        </Modal>
       )}
 
       <Toast toast={toast} onUndo={undo} onDismiss={dismissToast} />

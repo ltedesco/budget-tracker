@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import { MONTHS } from '../lib/model.js'
 import { summaryFor, chartSeries, topCategories, monthsWithActuals, actualCoverage } from '../lib/summary.js'
+import { backupMessage } from '../lib/backup.js'
 import { money, moneyShort, signed } from '../lib/format.js'
 import { chartColors } from '../lib/theme.js'
 
@@ -13,7 +14,7 @@ import { chartColors } from '../lib/theme.js'
 // colour alone — which is what makes the colour-vision separation a floor
 // rather than the only safeguard.
 
-export default function SummaryTab({ data, layer, theme = 'light' }) {
+export default function SummaryTab({ data, layer, theme = 'light', backup, onGoToBackup }) {
   const INK = useMemo(() => chartColors(theme), [theme])
   const planned = useMemo(() => summaryFor(data, 'planned'), [data])
   const actual = useMemo(() => summaryFor(data, 'actual'), [data])
@@ -32,6 +33,19 @@ export default function SummaryTab({ data, layer, theme = 'light' }) {
         <Card label="Net savings" value={view.totals.net} tone={view.totals.net >= 0 ? 'up' : 'down'} />
         <Card label="Ending balance" value={view.totals.ending} tone={view.totals.ending >= 0 ? '' : 'down'} />
       </div>
+
+      {/* Only when it is actually a problem. A banner shown every visit is a
+          banner nobody reads on the day it matters. */}
+      {backup && backup.status !== 'fresh' && data.items.length > 0 && (
+        <p className="note err">
+          <strong>{backupMessage(backup, data.year)}</strong>{' '}
+          The GitHub copy is not enough on its own — an account lost, or a stolen token, takes the
+          history with it.{' '}
+          {onGoToBackup && (
+            <button className="link" onClick={onGoToBackup}>Save a copy now</button>
+          )}
+        </p>
+      )}
 
       {layer === 'actual' && coverage.planned > 0 && coverage.ratio < 0.95 && (
         <p className="note">

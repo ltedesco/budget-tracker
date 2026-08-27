@@ -7,6 +7,13 @@
 // file, merges, and writes the union. That makes a 409 (someone committed
 // between our read and our write) safe to retry — the retry re-reads and
 // re-merges, so the other device's rows survive instead of being overwritten.
+//
+// The union has one way to destroy: a tombstone on the remote deletes a row
+// here. That is what a legitimate delete on another device looks like, and it
+// is also what tampering looks like. Neither can be told apart from the file
+// alone, so a merge that would drop a meaningful share of what this device
+// holds stops and reports rather than proceeding — on a push it stops BEFORE
+// the write, or the guard would only be describing damage already done.
 
 import { getFile as ghGetFile, putFile as ghPutFile } from './github.js'
 import { mergeData, validateData } from './model.js'
@@ -23,15 +30,56 @@ function parseRemote(content) {
   return result.data
 }
 
+/** What a document holds, in the three counts a wipe shows up in. */
+const census = (d) => ({
+  categories: d.categories.length,
+  items: d.items.length,
+  transactions: (d.transactions || []).length,
+})
+
+// A loss has to clear both bars to count. The absolute floor keeps a tidy-up
+// of two stray rows from raising an alarm; the share keeps a loss of 200
+// transactions out of 996 from slipping under a fixed threshold.
+//
+// Losing ALL of something bypasses the floor. Categories are few by nature —
+// a budget with three of them would otherwise have to lose every one without
+// the guard naming it.
+const LOSS_FLOOR = 3
+const LOSS_SHARE = 0.2
+
+/**
+ * What a merge would take away from `before`. Empty means the merge only ever
+ * adds, which is the ordinary case and needs no confirmation.
+ */
+export function mergeLosses(before, after) {
+  const a = census(before)
+  const b = census(after)
+  const losses = []
+  const check = (key, one, many) => {
+    const lost = a[key] - b[key]
+    const enough = lost >= LOSS_FLOOR || (b[key] === 0 && lost > 0)
+    if (enough && lost >= a[key] * LOSS_SHARE) {
+      losses.push({ key, lost, before: a[key], after: b[key], label: `${lost} ${lost === 1 ? one : many}` })
+    }
+  }
+  check('categories', 'category', 'categories')
+  check('items', 'line item', 'line items')
+  check('transactions', 'transaction', 'transactions')
+  return losses
+}
+
 export const serialize = (data) =>
   JSON.stringify({ ...data, exportedAt: new Date().toISOString() }, null, 2)
 
 /** Merge the remote file into `local`. Does not write. */
-export async function pullMerged(config, local, api = defaultApi) {
+export async function pullMerged(config, local, api = defaultApi, options = {}) {
   const { content, sha } = await api.getFile(config)
   const remote = parseRemote(content)
   if (!remote) return { merged: local, sha: null, existed: false }
-  return { merged: mergeData(local, remote), sha, existed: true }
+  const merged = mergeData(local, remote)
+  const losses = options.allowDestructive ? [] : mergeLosses(local, merged)
+  if (losses.length) return { merged, sha, existed: true, blocked: true, losses }
+  return { merged, sha, existed: true }
 }
 
 /**
@@ -39,12 +87,19 @@ export async function pullMerged(config, local, api = defaultApi) {
  * the caller should adopt as local state — it may contain rows this device had
  * never seen.
  */
-export async function pushMerged(config, local, api = defaultApi, attempts = 3) {
+export async function pushMerged(config, local, api = defaultApi, options = {}) {
+  const { attempts = 3, allowDestructive = false } = options
   let lastError
   for (let i = 0; i < attempts; i++) {
     const { content, sha } = await api.getFile(config)
     const remote = parseRemote(content)
     const merged = remote ? mergeData(local, remote) : local
+
+    // Before the write, not after: once putFile returns, the remote already
+    // holds the merge and reporting it would be an autopsy.
+    const losses = allowDestructive ? [] : mergeLosses(local, merged)
+    if (losses.length) return { merged, blocked: true, losses }
+
     try {
       const put = await api.putFile(config, serialize(merged), sha, 'Update budget data')
       return { merged, sha: put.sha }
