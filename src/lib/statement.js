@@ -200,6 +200,36 @@ export const RULES = [
   { merchant: /car\s*rental\s*protection/i, target: 'Travel::Transportation' },
   { merchant: /eractoll|carte\s*(italiane|straniere)/i, target: 'Travel::Transportation' },
 
+  // -- from the remaining unassigned tail ----------------------------------
+  // Amex's category is unhelpful for most of these: a bird feeder filed under
+  // "Employment Agencies", a massage-therapist membership under
+  // "Miscellaneous", airport food under "Other Services".
+  { merchant: /deckers\*?hoka|\bhoka\b|nike\.com/i, target: 'Everyday::Clothes' },
+  { merchant: /kindle\s*svcs|kindle/i, target: 'Entertainment::Hobbies' },
+  { merchant: /apple\s*online/i, target: 'Technology::Hardware' },
+  { merchant: /parkingpay|\bt2\*/i, target: 'Transportation::Other' },
+  { merchant: /apecwater|apec\s*water/i, target: 'Home::Supplies' },
+  { merchant: /airport-?f&b|airport\s*f\s*&\s*b/i, target: 'Travel::Food' },
+  { merchant: /motivatedn|connetquot/i, target: 'Children::School' },
+  { merchant: /mulligan.s\s*lagoon/i, target: 'Entertainment::Games' },
+  { merchant: /fundgive|\bgofundme\b/i, target: 'Gifts::Donations (charity)' },
+  { merchant: /premiertaxfree|premier\s*tax\s*free/i, target: 'Travel::Other' },
+  // Amex points redeemed against charges: a credit on the card, not spending.
+  { merchant: /points\s*for\s*charges/i, target: 'Debt::Credit cards' },
+  // Associated Bodywork & Massage Professionals — a membership for the massage
+  // work, which the 1099 side of the budget already tracks.
+  { merchant: /\babmp\b/i, target: 'Business (1099)::Insurance' },
+  { merchant: /\betsy\b|etsy\*/i, target: 'Gifts::Gifts' },
+  { merchant: /mybirdbuddy|bird\s*buddy/i, target: 'Entertainment::Hobbies' },
+
+  { merchant: /warenik|\bcpa\b|h&r\s*block|turbotax/i, target: 'Other::Professional fees' },
+  { merchant: /\bmoi\s*new\s*york\b|moi\s*new\s*york\*/i, target: 'Children::Activities' },
+  // Marketplace orders. The purpose is not in the file, so this is a judgement
+  // call rather than a deduction: most of it is household goods, and counting
+  // it in a real category beats leaving 2.5% of the year unattributed. Toys,
+  // gifts and furnishings bought this way will land here too.
+  { category: /internet\s*purchase|mail\s*order/i, target: 'Everyday::Personal supplies', fallback: true },
+
   // -- location, where the budget keeps a line per property -----------------
   { category: /cable\s*&\s*internet|internet\s*comm/i,
     byState: { NY: 'Home::Internet/Cable (sayville)', SC: 'Home::Internet/Cable (Surfside)' } },
@@ -266,6 +296,7 @@ export function stateOf(location) {
 export function matchRule(row) {
   let merchantHit = null
   let categoryHit = null
+  let fallbackHit = null
 
   for (const rule of RULES) {
     const byMerchant = Boolean(rule.merchant)
@@ -284,12 +315,20 @@ export function matchRule(row) {
     if (byMerchant) {
       if (rule.override) return target
       if (!merchantHit) merchantHit = target
+    } else if (rule.fallback) {
+      if (!fallbackHit) fallbackHit = target
     } else if (!categoryHit) {
       categoryHit = target
     }
   }
 
-  return categoryHit || merchantHit || null
+  // Confident card category, then merchant, then a fallback. The last tier is
+  // for categories that carry no real information — "Internet Purchase" is
+  // every marketplace order there is — where the mapping is a decision about
+  // where to put the money rather than a reading of what it was. Those must
+  // not outrank a merchant rule: a marketplace order from a shoe shop is
+  // still shoes.
+  return categoryHit || merchantHit || fallbackHit || null
 }
 
 /** Kept for callers that only have a category to go on. */
@@ -409,6 +448,13 @@ const norm = (s) => String(s || '').trim().toLowerCase()
 export const CATCH_ALL_ITEM = 'Unassigned card spend'
 export const CATCH_ALL_CATEGORY = 'Other'
 
+// Line items the rules target that a budget from the standard template will
+// not have. Created on demand alongside the catch-all so a rule pointing at
+// one is never a silent no-op.
+export const REQUIRED_ITEMS = [
+  { category: 'Other', name: 'Professional fees' },
+]
+
 /**
  * Fold rows into per-line-item monthly totals for one budget year.
  *
@@ -493,10 +539,15 @@ export function summarise(rows, data, { catchAll = true } = {}) {
   }
 
   const months = [...new Set([...cells.keys()].map((k) => Number(k.split(':')[1])))].sort((a, b) => a - b)
+  // Every month the statement touches, whether or not anything mapped in it.
+  const coveredMonths = [...new Set(
+    rows.filter((r) => !r.payment && r.year === data.year).map((r) => r.month),
+  )].sort((a, b) => a - b)
 
   return {
     cells,
     months,
+    coveredMonths,
     monthLabels: months.map((m) => MONTHS[m]),
     unmatched: [...unmatched.entries()]
       .map(([category, v]) => ({ category, ...v, total: round2(v.total) }))
@@ -553,10 +604,38 @@ export function previewRows(summary, data) {
  */
 export function applySummary(data, summary, at) {
   const stamp = at || new Date().toISOString()
+
+  // Months the statement actually covers. Needed because the catch-all line
+  // has to be cleared in those months when nothing lands on it — an earlier
+  // import with a poorer rule set can otherwise leave money stranded there,
+  // and "replace only the cells the statement covers" would never touch it
+  // again. Every other line may hold hand-entered figures, so those are only
+  // written where the statement has something to say.
+  const covered = new Set()
+  for (const row of summary.coveredMonths || summary.months || []) covered.add(row)
+
+  const catchAllId = data.items.find(
+    (i) => norm(i.name) === norm(CATCH_ALL_ITEM) &&
+      data.categories.find((c) => c.id === i.categoryId)?.kind === 'expense',
+  )?.id
+
   const items = data.items.map((item) => {
     let next = item
     for (let month = 0; month < 12; month++) {
       const key = `${item.id}:${month}`
+      const isStaleCatchAll =
+        item.id === catchAllId && covered.has(month) && !summary.cells.has(key)
+      if (isStaleCatchAll) {
+        const actual = [...(next.actual || Array(12).fill(null))]
+        actual[month] = null
+        next = {
+          ...next,
+          actual,
+          fieldsAt: { ...next.fieldsAt, [`actual.${month}`]: stamp },
+          updatedAt: stamp,
+        }
+        continue
+      }
       if (!summary.cells.has(key)) continue
       const actual = [...(next.actual || Array(12).fill(null))]
       actual[month] = summary.cells.get(key)
@@ -579,25 +658,35 @@ export function applySummary(data, summary, at) {
  */
 export function ensureCatchAll(data, make, at) {
   const stamp = at || new Date().toISOString()
+  let next = ensureItems(data, REQUIRED_ITEMS, make, stamp)
+  return ensureItem(next, CATCH_ALL_CATEGORY, CATCH_ALL_ITEM, make, stamp)
+}
+
+const ensureItems = (data, specs, make, stamp) =>
+  specs.reduce((acc, spec) => ensureItem(acc, spec.category, spec.name, make, stamp), data)
+
+/** Add one line item, and its category, only if they are not already there. */
+function ensureItem(data, categoryName, itemName, make, stamp) {
   const existing = data.items.find(
-    (i) => norm(i.name) === norm(CATCH_ALL_ITEM) &&
-      data.categories.find((c) => c.id === i.categoryId)?.kind === 'expense',
+    (i) => norm(i.name) === norm(itemName) &&
+      data.categories.find((c) => c.id === i.categoryId)?.kind === 'expense' &&
+      norm(data.categories.find((c) => c.id === i.categoryId)?.name) === norm(categoryName),
   )
   if (existing) return data
 
   let category = data.categories.find(
-    (c) => c.kind === 'expense' && norm(c.name) === norm(CATCH_ALL_CATEGORY),
+    (c) => c.kind === 'expense' && norm(c.name) === norm(categoryName),
   )
   const categories = [...data.categories]
   if (!category) {
     category = make.category(
-      { kind: 'expense', name: CATCH_ALL_CATEGORY, order: categories.length },
+      { kind: 'expense', name: categoryName, order: categories.length },
       stamp,
     )
     categories.push(category)
   }
 
   const order = data.items.filter((i) => i.categoryId === category.id).length
-  const item = make.item({ categoryId: category.id, name: CATCH_ALL_ITEM, order }, stamp)
+  const item = make.item({ categoryId: category.id, name: itemName, order }, stamp)
   return { ...data, categories, items: [...data.items, item] }
 }

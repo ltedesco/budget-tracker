@@ -61,7 +61,10 @@ test('maps card categories only where the mapping is unambiguous', () => {
   assert.equal(targetForCategory('Transportation-Fuel'), 'Transportation::Fuel')
   assert.equal(targetForCategory('Travel-Lodging'), 'Travel::Hotels')
   // Deliberately unmapped: guessing here would move money between budget lines.
-  assert.equal(targetForCategory('Merchandise & Supplies-Internet Purchase'), null)
+  // Marketplace orders were once left unassigned. That was the honest default
+  // while it was 71% of the statement; at 2.5% the money is better attributed
+  // than left in limbo, so they now land on household supplies by decision.
+  assert.equal(targetForCategory('Merchandise & Supplies-Internet Purchase'), 'Everyday::Personal supplies')
   assert.equal(targetForCategory(''), null)
 })
 
@@ -207,10 +210,12 @@ import { makeCategory as mkCat, makeItem as mkItem } from '../src/lib/model.js'
 
 const MAKE = { category: mkCat, item: mkItem }
 
-test('ensureCatchAll creates the line once and is idempotent', () => {
+test('ensureCatchAll creates the lines once and is idempotent', () => {
   const d = budget()
   const once = ensureCatchAll(d, MAKE, BORN)
-  assert.equal(once.items.length, d.items.length + 1)
+  // The catch-all plus every line item the rules require but a template lacks.
+  assert.equal(once.items.length, d.items.length + 2)
+  assert.ok(once.items.some((i) => i.name === 'Professional fees'))
   assert.ok(once.items.some((i) => i.name === CATCH_ALL_ITEM))
   const twice = ensureCatchAll(once, MAKE, BORN)
   assert.equal(twice.items.length, once.items.length)
@@ -436,9 +441,14 @@ test('state is read off the export cell', () => {
   assert.equal(stateOf(''), '')
 })
 
-test('marketplace purchases stay unassigned — the purpose is not in the file', () => {
-  assert.equal(matchRule(row({ description: 'AMAZON MARKEPLACE NA PA', category: 'Merchandise & Supplies-Internet Purchase' })), null)
-  assert.equal(matchRule(row({ description: 'WALMART.COM BENTONVILLE', category: 'Merchandise & Supplies-Internet Purchase' })), null)
+test('marketplace purchases are attributed by decision, not deduction', () => {
+  // The purpose genuinely is not in the file; this is a judgement that most of
+  // it is household goods, taken because leaving it unattributed cost more.
+  for (const m of ['AMAZON MARKEPLACE NA PA', 'WALMART.COM BENTONVILLE', 'AplPay TARGET.COM BROOKLYN PARK']) {
+    assert.equal(matchRule(row({ description: m, category: 'Merchandise & Supplies-Internet Purchase' })), 'Everyday::Personal supplies')
+  }
+  // A merchant rule inside that category still wins where one exists.
+  assert.equal(matchRule(row({ description: 'DECKERS*HOKA 866-491-3125', category: 'Merchandise & Supplies-Internet Purchase' })), 'Everyday::Clothes')
 })
 
 test('Plan It instalment fees are financing, not spending', () => {
@@ -520,4 +530,43 @@ test('every rule names a target shaped Category::Item', () => {
       assert.ok(typeof spec === 'string' && spec.includes('::'), `unqualified target: ${spec}`)
     }
   }
+})
+
+test('a re-import clears money an earlier rule set stranded on the catch-all', () => {
+  // The real failure: an import with poor rules put $37,729 on the catch-all.
+  // Better rules then mapped everything, so the new summary had no cell for
+  // that line — and "replace only what the statement covers" left the stale
+  // figure sitting there forever.
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const catchAll = d.items.find((i) => i.name === CATCH_ALL_ITEM)
+  d = {
+    ...d,
+    items: d.items.map((i) =>
+      i.id === catchAll.id ? { ...i, actual: [37729.8, null, null, null, null, null, null, null, null, null, null, null] } : i),
+  }
+
+  // A statement covering January, where everything now maps to real lines.
+  const csv = `Date,Description,Amount,Category
+01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries`
+  const s = summarise(parseStatement(csv).rows, d)
+  const after = applySummary(d, s, '2026-09-01T00:00:00Z')
+
+  assert.equal(after.items.find((i) => i.id === catchAll.id).actual[0], null, 'stale catch-all must be cleared')
+  assert.equal(after.items.find((i) => i.name === 'Groceries').actual[0], 152.4)
+})
+
+test('clearing the catch-all only touches months the statement covers', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const catchAll = d.items.find((i) => i.name === CATCH_ALL_ITEM)
+  const actual = Array(12).fill(null)
+  actual[0] = 100   // January, which the statement covers
+  actual[9] = 999   // October, which it does not
+  d = { ...d, items: d.items.map((i) => (i.id === catchAll.id ? { ...i, actual } : i)) }
+
+  const csv = `Date,Description,Amount,Category
+01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries`
+  const after = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z')
+  const got = after.items.find((i) => i.id === catchAll.id).actual
+  assert.equal(got[0], null, 'covered month cleared')
+  assert.equal(got[9], 999, 'untouched month kept')
 })

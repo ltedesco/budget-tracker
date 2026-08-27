@@ -33,8 +33,7 @@ export default function SummaryTab({ data, layer }) {
       {layer === 'actual' && coverage.planned > 0 && coverage.ratio < 0.95 && (
         <p className="note">
           <strong>Actuals cover {Math.round(coverage.ratio * 100)}% of planned expenses</strong> —{' '}
-          {money(coverage.covered)} of {money(coverage.planned)}, across{' '}
-          {coverage.trackedItems} of {coverage.plannedItems} budgeted line items.{' '}
+          {money(coverage.covered)} of {money(coverage.planned)}.{' '}
           {money(coverage.uncovered)} of the plan has nothing recorded against it, so the totals
           above are <strong>not</strong> a like-for-like comparison with the plan and will always
           look like an underspend. Read the per-category variance instead, and only for the
