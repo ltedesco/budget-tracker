@@ -1,0 +1,51 @@
+Copyright (c) 2026 ltedesco (https://github.com/ltedesco)
+All rights reserved.
+
+This repository is public only because GitHub Pages requires a public
+repository to host a site on a free personal account. Public visibility is
+not an offer of a licence, and this software is not open source.
+
+
+NO LICENCE IS GRANTED
+
+No permission is granted to any person to copy, modify, adapt, merge,
+publish, distribute, sublicense, sell, or create derivative works from this
+software or any part of it, in either source or compiled form, for any
+purpose, commercial or otherwise. Copying the design, layout, or structure of
+this application into another work is likewise not permitted.
+
+Reading the source is welcome. Reusing it is not.
+
+
+WHAT GITHUB'S TERMS ALREADY ALLOW
+
+By hosting a public repository on GitHub, the owner grants every GitHub user
+a licence to view this content and to reproduce it by forking, within GitHub,
+as permitted by GitHub's own functionality (GitHub Terms of Service, D.5).
+Nothing above overrides that, because it cannot. What the paragraph above
+withholds is everything beyond it: publishing a fork elsewhere, deploying it,
+or building another product from it.
+
+
+THIRD-PARTY COMPONENTS
+
+This application is built with open-source libraries — among them React,
+Recharts, fflate and PapaParse — each distributed under its own licence,
+principally the MIT Licence. Those licences govern those components and are
+unaffected by this one. Nothing here claims any right over them, and their
+terms, including the requirement to preserve their copyright notices, are
+carried through to anything this application bundles.
+
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. THIS IS A PERSONAL
+BUDGETING TOOL AND IS NOT FINANCIAL, TAX, OR ACCOUNTING ADVICE. IN NO EVENT
+SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+To ask about any use not permitted here, open an issue on the repository.

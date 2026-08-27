@@ -150,3 +150,13 @@ items with it, since an item with no category could not be displayed.
 
 `test/merge.test.mjs` and `test/sync.test.mjs` cover this, including a real
 409-during-push race. CI runs them before every deploy.
+
+## Licence
+
+All rights reserved — see [LICENSE](LICENSE). This repository is public only
+because GitHub Pages needs a public repository to serve a site from a free
+account; it is not open source, and no permission is given to reuse the code or
+copy the design. Reading it is welcome.
+
+The libraries it is built on (React, Recharts, fflate, PapaParse) remain under
+their own licences.
