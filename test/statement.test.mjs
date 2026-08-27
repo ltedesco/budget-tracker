@@ -670,3 +670,107 @@ test('the per-source breakdown survives a merge between devices', () => {
   assert.equal(merged.actual[5], 776.82)
   assert.deepEqual(merged.imported['5'], { [CARD_A]: 776.82 })
 })
+
+// --- transaction detail ------------------------------------------------------
+
+import { transactionId, toISODate } from '../src/lib/statement.js'
+import { mergeData } from '../src/lib/model.js'
+
+test('a transaction id is derived from content, not randomness', () => {
+  const a = transactionId(CARD_A, '2026-01-04', 152.4, 'WHOLEFDS', 1)
+  const b = transactionId(CARD_A, '2026-01-04', 152.4, 'WHOLEFDS', 1)
+  assert.equal(a, b, 'same input, same id — so re-import dedupes')
+  assert.notEqual(a, transactionId(CARD_A, '2026-01-04', 152.4, 'WHOLEFDS', 2), 'repeats stay distinct')
+  assert.notEqual(a, transactionId(CARD_B, '2026-01-04', 152.4, 'WHOLEFDS', 1), 'cards stay distinct')
+})
+
+test('the transactions behind a figure add up to it', () => {
+  const csv = `Date,Description,Amount,Category
+01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries
+01/20/2026,STOP & SHOP,47.60,Merchandise & Supplies-Groceries`
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+
+  const groceries = d.items.find((i) => i.name === 'Groceries')
+  const behind = d.transactions.filter((t) => t.itemId === groceries.id && t.month === 0)
+  assert.equal(behind.length, 2)
+  assert.equal(behind.reduce((a, t) => a + t.amount, 0), groceries.actual[0])
+  assert.deepEqual(behind.map((t) => t.desc).sort(), ['STOP & SHOP', 'WHOLEFDS MARKET'])
+  // The card's own category rides along, since that is what shows a misfire.
+  assert.ok(behind.every((t) => t.cardCategory.includes('Groceries')))
+})
+
+test('five identical charges on one day are five transactions', () => {
+  const rows = Array(5).fill('01/04/2026,TOLL BOOTH,4.00,Transportation-Fuel').join('\n')
+  const csv = `Date,Description,Amount,Category\n${rows}`
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  assert.equal(d.transactions.length, 5)
+  assert.equal(new Set(d.transactions.map((t) => t.id)).size, 5)
+  assert.equal(d.items.find((i) => i.name === 'Fuel').actual[0], 20)
+})
+
+test('re-importing replaces only this card\'s transactions for those months', () => {
+  const amex = `Date,Description,Amount,Category
+06/04/2026,AMEX RESTAURANT,776.82,Restaurant-Restaurant`
+  const capone = `Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit
+2026-06-11,2026-06-12,0377,CAPONE DINER,Dining,63.66,`
+
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(amex).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  d = applySummary(d, summarise(parseStatement(capone).rows, d), '2026-09-02T00:00:00Z', CARD_B)
+  assert.equal(d.transactions.length, 2)
+
+  const corrected = `Date,Description,Amount,Category
+06/04/2026,AMEX RESTAURANT,500.00,Restaurant-Restaurant`
+  d = applySummary(d, summarise(parseStatement(corrected).rows, d), '2026-09-03T00:00:00Z', CARD_A)
+
+  assert.equal(d.transactions.length, 2, 'no duplicate left behind')
+  assert.equal(d.transactions.filter((t) => t.source === CARD_B).length, 1, "the other card's row survives")
+  assert.equal(d.transactions.find((t) => t.source === CARD_A).amount, 500)
+})
+
+test('two devices importing the same file do not double the transactions', () => {
+  const csv = `Date,Description,Amount,Category
+01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries`
+  const base = ensureCatchAll(budget(), MAKE, BORN)
+  const phone = applySummary(base, summarise(parseStatement(csv).rows, base), '2026-09-01T00:00:00Z', CARD_A)
+  const laptop = applySummary(base, summarise(parseStatement(csv).rows, base), '2026-09-02T00:00:00Z', CARD_A)
+  const merged = mergeData(phone, laptop)
+  assert.equal(merged.transactions.length, 1)
+})
+
+test('transactions for a deleted line item are dropped on merge', () => {
+  const csv = `Date,Description,Amount,Category
+01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries`
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  const groceries = d.items.find((i) => i.name === 'Groceries')
+
+  const withoutItem = {
+    ...d,
+    items: d.items.filter((i) => i.id !== groceries.id),
+    deleted: [{ id: groceries.id, at: '2026-09-05T00:00:00Z' }],
+  }
+  const merged = mergeData(withoutItem, d)
+  assert.equal(merged.items.some((i) => i.id === groceries.id), false)
+  assert.equal(merged.transactions.some((t) => t.itemId === groceries.id), false)
+})
+
+test('dates are normalised to ISO whatever the card wrote', () => {
+  // Amex writes MM/DD/YYYY, Capital One YYYY-MM-DD. A transaction list mixing
+  // both must sort and read consistently.
+  assert.equal(toISODate('08/24/2026'), '2026-08-24')
+  assert.equal(toISODate('2026-08-24'), '2026-08-24')
+  assert.equal(toISODate('1/4/26'), '2026-01-04')
+  assert.equal(toISODate('nonsense'), '')
+
+  const amex = `Date,Description,Amount,Category
+03/01/2026,WHOLEFDS MARKET,170.00,Merchandise & Supplies-Groceries`
+  const capone = `Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit
+2026-03-28,2026-03-29,0377,GOLDEN KITCHEN,Dining,431.38,`
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(amex).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  d = applySummary(d, summarise(parseStatement(capone).rows, d), '2026-09-02T00:00:00Z', CARD_B)
+  assert.deepEqual(d.transactions.map((t) => t.date).sort(), ['2026-03-01', '2026-03-28'])
+})

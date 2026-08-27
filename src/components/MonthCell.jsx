@@ -12,7 +12,7 @@ import { cellText } from '../lib/format.js'
  * Navigation is by `data-cell` lookup rather than a ref for every cell, which
  * keeps the grid from holding hundreds of refs it would otherwise never use.
  */
-export default function MonthCell({ value, onCommit, label, cellKey, onNavigate }) {
+export default function MonthCell({ value, onCommit, label, cellKey, onNavigate, onInspect, inspectMode }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const ref = useRef(null)
@@ -53,9 +53,22 @@ export default function MonthCell({ value, onCommit, label, cellKey, onNavigate 
     <button
       type="button"
       data-cell={cellKey}
-      className={`cell-btn${blank ? ' blank' : ''}`}
-      aria-label={label}
-      onClick={() => { setDraft(asText); setEditing(true) }}
+      className={`cell-btn${blank ? ' blank' : ''}${onInspect ? ' has-detail' : ''}`}
+      aria-label={onInspect ? `${label}. Opens the transactions behind it` : label}
+      title={onInspect ? 'Alt-click to see the transactions behind this figure' : undefined}
+      onClick={(e) => {
+        // Inspect mode makes a plain tap open the detail, which is the only
+        // thing that works on a phone: a long press fights the text-selection
+        // callout, and there is no modifier key to hold.
+        if (onInspect && (inspectMode || e.altKey || e.metaKey)) {
+          e.preventDefault()
+          onInspect()
+          return
+        }
+        setDraft(asText)
+        setEditing(true)
+      }}
+      onContextMenu={(e) => { if (onInspect) { e.preventDefault(); onInspect() } }}
     >
       {blank ? '–' : cellText(value)}
     </button>

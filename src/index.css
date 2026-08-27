@@ -209,3 +209,8 @@ th.derived { text-align: right; }
 .toast { width: max-content; }
 .toast > span { flex: 1 1 auto; min-width: 0; }
 .toast button { flex: 0 0 auto; }
+
+/* A figure with transactions behind it is openable. The hint is deliberately
+   faint: editing is still the primary action on the grid. */
+.cell-btn.has-detail { border-bottom: 1px dotted var(--line); }
+.cell-btn.has-detail:hover { border-color: var(--accent); }

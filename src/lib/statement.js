@@ -87,6 +87,27 @@ export function detectColumns(fields = []) {
 
 // --- value parsing ----------------------------------------------------------
 
+/**
+ * Normalise a statement date to ISO, whatever the card wrote.
+ *
+ * Amex writes MM/DD/YYYY and Capital One writes YYYY-MM-DD. Storing them as
+ * they arrive means a transaction list mixing two cards sorts wrongly and
+ * reads inconsistently, so the day is pinned down here rather than at display
+ * time. Returns '' when the date cannot be read.
+ */
+export function toISODate(raw) {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return serialToISO(raw) || ''
+  const s = String(raw || '').trim()
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`
+  const us = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/)
+  if (us) {
+    const year = us[3].length === 2 ? String(2000 + Number(us[3])) : us[3]
+    return `${year}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
+  }
+  return ''
+}
+
 /** Amex US writes MM/DD/YYYY; ISO is accepted too. Returns [year, monthIndex]. */
 export function parseStatementDate(raw) {
   const s = String(raw || '').trim()
@@ -457,7 +478,16 @@ export function parseStatement(input) {
     const description = String(at('description') ?? '').trim()
     const category = String(at('category') ?? '').trim()
     const location = String(at('location') ?? '').trim()
-    const row = { year, month, amount, description, category, state: stateOf(location) }
+    const row = {
+      year,
+      month,
+      amount,
+      description,
+      category,
+      state: stateOf(location),
+      date: toISODate(at('date')),
+      fingerprint: `${toISODate(at('date'))}|${amount}|${description}`,
+    }
 
     rows.push({
       ...row,
@@ -561,7 +591,7 @@ export function resolveTarget(data, spec) {
   return { item: hits[0] || null }
 }
 
-export function summarise(rows, data, { catchAll = true } = {}) {
+export function summarise(rows, data, { catchAll = true, source = 'import' } = {}) {
 
   const cells = new Map() // `${itemId}:${month}` -> total
   const unmatched = new Map() // category -> { total, count }
@@ -571,6 +601,8 @@ export function summarise(rows, data, { catchAll = true } = {}) {
   let assigned = 0
   let swept = 0
   const ambiguousTargets = new Set()
+  const transactions = []
+  const occurrences = new Map()
 
   for (const row of rows) {
     if (row.payment || row.amount < 0) {
@@ -604,6 +636,19 @@ export function summarise(rows, data, { catchAll = true } = {}) {
     cells.set(key, round2((cells.get(key) || 0) + row.amount))
     assigned += row.amount
     if (!row.target) swept += row.amount
+
+    const seen = (occurrences.get(row.fingerprint) || 0) + 1
+    occurrences.set(row.fingerprint, seen)
+    transactions.push({
+      id: transactionId(source, row.date, row.amount, row.description, seen),
+      source,
+      date: row.date,
+      month: row.month,
+      amount: round2(row.amount),
+      desc: row.description.replace(/\s+/g, ' ').slice(0, 120),
+      cardCategory: row.category.slice(0, 80),
+      itemId: item.id,
+    })
   }
 
   const months = [...new Set([...cells.keys()].map((k) => Number(k.split(':')[1])))].sort((a, b) => a - b)
@@ -616,6 +661,8 @@ export function summarise(rows, data, { catchAll = true } = {}) {
     cells,
     months,
     coveredMonths,
+    transactions,
+    source,
     monthLabels: months.map((m) => MONTHS[m]),
     unmatched: [...unmatched.entries()]
       .map(([category, v]) => ({ category, ...v, total: round2(v.total) }))
@@ -642,6 +689,26 @@ export function summarise(rows, data, { catchAll = true } = {}) {
 }
 
 const round2 = (n) => Math.round(n * 100) / 100
+
+/**
+ * A transaction id derived from its own content rather than randomly.
+ *
+ * Two consequences that matter: re-importing the same statement produces the
+ * same ids, so it is idempotent; and two devices importing the same file
+ * produce identical rows, so the merge dedupes them instead of doubling them.
+ * The occurrence index separates genuinely repeated charges — five identical
+ * toll payments on one day are five transactions, not one.
+ */
+export function transactionId(source, date, amount, desc, occurrence) {
+  const seed = `${source}|${date}|${amount}|${desc}|${occurrence}`
+  let h1 = 0x811c9dc5
+  let h2 = 0x01000193
+  for (let i = 0; i < seed.length; i++) {
+    h1 = Math.imul(h1 ^ seed.charCodeAt(i), 0x01000193) >>> 0
+    h2 = Math.imul(h2 + seed.charCodeAt(i), 0x85ebca6b) >>> 0
+  }
+  return (h1.toString(36) + h2.toString(36)).slice(0, 12)
+}
 
 /** Per-line-item rows for the preview table, largest first. */
 export function previewRows(summary, data) {
@@ -672,6 +739,15 @@ export function previewRows(summary, data) {
  */
 export function applySummary(data, summary, at, source = 'manual-import') {
   const stamp = at || new Date().toISOString()
+  const covered0 = new Set(summary.coveredMonths || summary.months || [])
+  // This source's transactions in the months being re-imported are replaced
+  // wholesale; every other source's, and every other month's, are left alone.
+  const transactions = [
+    ...(data.transactions || []).filter(
+      (t) => !(t.source === source && covered0.has(t.month)),
+    ),
+    ...(summary.transactions || []).map((t) => ({ ...t, source })),
+  ]
 
   // Months the statement covers, whether or not anything mapped in them. A
   // month this source touched but no longer contributes to must have its old
@@ -714,7 +790,7 @@ export function applySummary(data, summary, at, source = 'manual-import') {
     return next
   })
 
-  return { ...data, items }
+  return { ...data, items, transactions }
 }
 
 /**

@@ -1,5 +1,7 @@
 import { useMemo } from 'react'
+import { useState } from 'react'
 import MonthCell from './MonthCell.jsx'
+import CellDetail from './CellDetail.jsx'
 import EditableText from './EditableText.jsx'
 import { MONTHS, sumMonths } from '../lib/model.js'
 import { categoriesOf, itemsOf, categoryMonths, kindMonths, variance } from '../lib/summary.js'
@@ -15,8 +17,10 @@ import { moneyShort, signed } from '../lib/format.js'
  * The 'variance' layer is read-only: it is derived, so there is nothing to
  * type into it.
  */
-export default function BudgetGrid({ data, kind, layer, actions, collapsed, onToggleCategory }) {
+export default function BudgetGrid({ data, kind, layer, actions, collapsed, onToggleCategory, inspectMode, onInspectMode }) {
   const cats = useMemo(() => categoriesOf(data, kind), [data, kind])
+  // { item, category, month } while a figure is opened up.
+  const [detail, setDetail] = useState(null)
   const readOnly = layer === 'variance'
 
   const totals = useMemo(() => {
@@ -137,6 +141,12 @@ export default function BudgetGrid({ data, kind, layer, actions, collapsed, onTo
                               label={`${item.name}, ${MONTHS[i]}, ${layer}`}
                               onCommit={(val) => actions.setCell(item.id, layer, i, val)}
                               onNavigate={(dir) => navigate(item.id, i, dir)}
+                              inspectMode={inspectMode}
+                              onInspect={
+                                layer === 'actual' && hasDetail(data, item.id, i)
+                                  ? () => setDetail({ item, category: cat, month: i })
+                                  : undefined
+                              }
                             />
                           )}
                         </td>
@@ -179,9 +189,30 @@ export default function BudgetGrid({ data, kind, layer, actions, collapsed, onTo
         </table>
       </div>
 
-      <div className="row" style={{ marginTop: 12 }}>
+      <div className="row" style={{ marginTop: 12, alignItems: 'center', gap: 12 }}>
         <button onClick={() => actions.addCategory(kind)}>+ Add category</button>
+        {layer === 'actual' && (data.transactions || []).length > 0 && (
+          <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={Boolean(inspectMode)}
+              style={{ width: 'auto' }}
+              onChange={(e) => onInspectMode(e.target.checked)}
+            />
+            Tap a figure to see its transactions
+          </label>
+        )}
       </div>
+
+      {detail && (
+        <CellDetail
+          data={data}
+          item={detail.item}
+          category={detail.category}
+          month={detail.month}
+          onClose={() => setDetail(null)}
+        />
+      )}
 
       {layer === 'variance' && (
         <p className="small muted" style={{ marginTop: 10 }}>
@@ -193,6 +224,10 @@ export default function BudgetGrid({ data, kind, layer, actions, collapsed, onTo
     </>
   )
 }
+
+/** Whether a figure has transactions recorded behind it, so it can be opened. */
+const hasDetail = (data, itemId, month) =>
+  (data.transactions || []).some((t) => t.itemId === itemId && t.month === month)
 
 /** Colour is a hint only — the sign is always printed alongside it. */
 function varianceClass(layer, v) {

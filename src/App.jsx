@@ -358,6 +358,7 @@ export default function App() {
   }, [])
 
   const setLayer = useCallback((next) => setPrefs((p) => ({ ...p, layer: next })), [])
+  const setInspect = useCallback((on) => setPrefs((p) => ({ ...p, inspect: on })), [])
 
   const syncLabel = !sync.tokenEnc && !token
     ? 'Sync off'
@@ -412,6 +413,8 @@ export default function App() {
             actions={actions}
             collapsed={collapsed}
             onToggleCategory={toggleCategory}
+            inspectMode={Boolean(prefs.inspect)}
+            onInspectMode={setInspect}
           />
         </div>
       )}

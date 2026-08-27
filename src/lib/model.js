@@ -64,6 +64,10 @@ export const emptyData = (year = currentYear()) => ({
   startingBalanceAt: '',
   categories: [],
   items: [],
+  // Individual imported transactions, kept so a monthly figure can be opened
+  // up and checked against what it was actually made of. Totals remain the
+  // authoritative numbers; this is the audit trail behind them.
+  transactions: [],
   deleted: [],
 })
 
@@ -213,6 +217,21 @@ export function validateData(raw) {
         .filter((t) => t.id)
     : []
 
+  const transactions = Array.isArray(raw.transactions)
+    ? raw.transactions
+        .map((t) => ({
+          id: String(t?.id ?? ''),
+          source: String(t?.source ?? ''),
+          date: String(t?.date ?? ''),
+          month: Number.isInteger(Number(t?.month)) ? Number(t.month) : -1,
+          amount: toCell(t?.amount) ?? 0,
+          desc: String(t?.desc ?? '').slice(0, 120),
+          cardCategory: String(t?.cardCategory ?? '').slice(0, 80),
+          itemId: String(t?.itemId ?? ''),
+        }))
+        .filter((t) => t.id && t.itemId && t.month >= 0 && t.month <= 11)
+    : []
+
   const year = Number(raw.year)
 
   return {
@@ -224,6 +243,7 @@ export function validateData(raw) {
       startingBalanceAt: String(raw.startingBalanceAt ?? ''),
       categories,
       items,
+      transactions,
       deleted,
     },
   }
@@ -388,6 +408,22 @@ function mergeCategory(a, b) {
 }
 
 /** Merge two whole documents. Commutative in content; order follows `remote`. */
+/**
+ * Union transactions by id. Ids are derived from the statement content, so the
+ * same file imported on two devices yields identical rows and dedupes cleanly.
+ *
+ * The known limit: if one device re-imports a corrected statement that drops a
+ * transaction, and the other still holds the old one, the union brings it back.
+ * Re-importing on either device settles it. Anything stronger would need
+ * per-source tombstones, which is more bookkeeping than the case warrants.
+ */
+function mergeTransactions(a = [], b = [], liveItemIds) {
+  const byId = new Map()
+  for (const t of [...b, ...a]) if (!byId.has(t.id)) byId.set(t.id, t)
+  // A transaction whose line item was deleted has nothing left to explain.
+  return [...byId.values()].filter((t) => liveItemIds.has(t.itemId))
+}
+
 export function mergeData(local, remote) {
   const deleted = mergeTombstones(local.deleted, remote.deleted)
   const balanceFromLocal =
@@ -396,6 +432,8 @@ export function mergeData(local, remote) {
     (local.startingBalanceAt || '') === (remote.startingBalanceAt || '')
       ? Math.max(local.startingBalance || 0, remote.startingBalance || 0)
       : (balanceFromLocal ? local : remote).startingBalance
+
+  const mergedItems = mergeRows(local.items, remote.items, deleted, mergeItem)
 
   return {
     version: 1,
@@ -406,7 +444,10 @@ export function mergeData(local, remote) {
       ? local.startingBalanceAt || remote.startingBalanceAt
       : remote.startingBalanceAt,
     categories: mergeRows(local.categories, remote.categories, deleted, mergeCategory),
-    items: mergeRows(local.items, remote.items, deleted, mergeItem),
+    items: mergedItems,
+    transactions: mergeTransactions(
+      local.transactions, remote.transactions, new Set(mergedItems.map((i) => i.id)),
+    ),
     deleted,
   }
 }
