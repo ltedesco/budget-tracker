@@ -25,6 +25,7 @@ const HEADER_PATTERNS = {
   amount: [/^amount$/i, /^debit/i],
   category: [/^category$/i, /^type$/i],
   reference: [/^reference$/i, /^transaction id/i],
+  location: [/city\s*\/\s*state/i, /^city$/i, /^state$/i],
 }
 
 /**
@@ -109,35 +110,122 @@ const PAYMENT_PATTERNS = [
 export const isCardPayment = (description) =>
   PAYMENT_PATTERNS.some((p) => p.test(String(description || '')))
 
-// --- category mapping -------------------------------------------------------
+// --- rules -----------------------------------------------------------------
 //
-// Matched against the card's category, lowercased, first hit wins. The target
-// is a line-item NAME, resolved against the budget's own items — so renaming a
-// line item in the app is all it takes to re-point a rule.
+// A budget classifies by PURPOSE — what the money was for. A card classifies
+// by MERCHANT TYPE — who was paid. Those are different axes that only
+// correlate, which is why one Amex category can span several budget lines
+// ("Other-Utilities" covers an electricity bill, a water bill and a second
+// home's energy) and why one budget line draws from several card categories.
 //
-// Kept short on purpose. Every rule here is one I would defend as unambiguous;
-// everything else belongs in the unmatched list where it can be seen.
+// So rules are tried most-specific first:
+//
+//   1. merchant   — the description names the payee, which is the strongest
+//                   signal available and the only one that can split a single
+//                   card category across budget lines
+//   2. category   — the card's own label, good for the genuinely many-to-one
+//                   cases like groceries or fuel
+//   3. location   — where the budget keeps one line per property, the state
+//                   the merchant sits in decides which one
+//
+// Anything left is sent to the catch-all. That residue is not a failure: for
+// a marketplace charge the purpose genuinely is not in the file, and inventing
+// a category for it would be worse than admitting the gap.
+//
+// Targets are written "Category::Item". The separator is not "/" because both
+// category and item names here contain slashes ("Health/medical",
+// "Internet/Cable (Surfside)"). Qualifying by category matters: five item
+// names in this budget are duplicated across categories, so a bare name like
+// "Supplies" could otherwise resolve to Home, Pets or Transportation at random.
 
-export const CATEGORY_RULES = [
-  [/groceries|supermarket|wholesale\s*stores?/, 'Groceries'],
-  [/restaurant|bar\s*&\s*caf|fast\s*food|dining/, 'Restaurants'],
-  [/fuel|gas\s*station|service\s*station/, 'Fuel'],
-  [/airline|air\s*travel/, 'Airfare'],
-  [/lodging|hotel/, 'Hotels'],
-  [/clothing|apparel/, 'Clothes'],
-  [/pharmac|drug\s*stores?/, 'Personal supplies'],
-  [/general\s*retail|merchandise\s*&\s*supplies-general/, 'Personal supplies'],
+export const TARGET_SEPARATOR = '::'
+
+export const RULES = [
+  // -- merchant ------------------------------------------------------------
+  { merchant: /gofundme|red\s*cross|unicef/i, target: 'Gifts::Donations (charity)' },
+  // Amex "Plan It" instalment fees: finance charges, not spending.
+  { merchant: /^\s*plan\s+fee\b/i, target: 'Debt::Credit cards' },
+  { merchant: /\bpseg\b|national\s*grid/i, target: 'Utilities::Electricity' },
+  { merchant: /grand\s*strand\s*water/i, target: 'Utilities::Water ( Surfside)' },
+  { merchant: /dominion\s*energy/i, target: 'Utilities::2nd home utilities' },
+  { merchant: /suffolk\s*county\s*water/i, target: 'Utilities::Water (Sayville)' },
+  { merchant: /state\s*farm|geico|allstate/i, target: 'Insurance::Sayville Car/Home Insurance' },
+  // Amex files streaming under "Cable & Internet", but the budget treats it as
+  // a subscription, not a utility.
+  { merchant: /netflix|discovery\s*digital|paramount|hulu|disney\s*plus|max\.com/i,
+    target: 'Technology::Netflix/Paramount/Discovery' },
+  { merchant: /openai|anthropic|chatgpt|claude\.ai|cursor|perplexity/i,
+    target: 'Technology::Claude/GPT' },
+  // "Lowe's" needs the exclusion: Lowe's Foods is a Carolinas grocery chain,
+  // unrelated to the hardware store, and without it a merchant rule quietly
+  // moved $240 of groceries onto Home Supplies. Merchant rules run ahead of
+  // card categories by design — which is what lets Netflix beat Amex's "Cable
+  // & Internet" label — so a loose one overrides a correct classification
+  // rather than merely adding to it. Keep them narrow.
+  { merchant: /home\s*depot|lowe'?s(?!\s*foods)|ace\s*hardware|shoreline\s*supply|staples|menards/i,
+    target: 'Home::Supplies' },
+  { merchant: /floor\s*and\s*decor|fourth\s*and\s*main|wayfair|ikea|pottery\s*barn/i,
+    target: 'Home::Furnishings' },
+  { merchant: /\bomny\b|\blirr\b|\bmta\b|metrocard|amtrak|njtransit/i,
+    target: 'Transportation::Public transit' },
+  { merchant: /cinemark|\bamc\b|regal\s*cinema|fandango/i, target: 'Entertainment::Movies' },
+  { merchant: /northwell|quest\s*diagnost|labcorp|cvs\s*minute/i,
+    target: 'Health/medical::Doctors/dental/vision' },
+  { merchant: /planet\s*fitness|lifetime\s*fitness|\bgym\b|orangetheory/i, target: 'Other::GYM' },
+
+  // -- location, where the budget keeps a line per property -----------------
+  { category: /cable\s*&\s*internet|internet\s*comm/i,
+    byState: { NY: 'Home::Internet/Cable (sayville)', SC: 'Home::Internet/Cable (Surfside)' } },
+  { category: /water|sewer/i,
+    byState: { NY: 'Utilities::Water (Sayville)', SC: 'Utilities::Water ( Surfside)' } },
+
+  // -- card category --------------------------------------------------------
+  { category: /groceries|supermarket|wholesale\s*stores?/i, target: 'Everyday::Groceries' },
+  { category: /restaurant|bar\s*&\s*caf|fast\s*food|dining/i, target: 'Everyday::Restaurants' },
+  { category: /fuel|gas\s*station|service\s*station/i, target: 'Transportation::Fuel' },
+  { category: /airline|air\s*travel/i, target: 'Travel::Airfare' },
+  { category: /lodging|hotel/i, target: 'Travel::Hotels' },
+  { category: /clothing|apparel/i, target: 'Everyday::Clothes' },
+  { category: /pharmac|drug\s*stores?/i, target: 'Everyday::Personal supplies' },
+  { category: /general\s*retail/i, target: 'Everyday::Personal supplies' },
+  { category: /florists?\s*&\s*garden|furnishing/i, target: 'Home::Furnishings' },
+  { category: /hardware|office\s*supplies/i, target: 'Home::Supplies' },
+  { category: /charit/i, target: 'Gifts::Donations (charity)' },
+  { category: /rail\s*services|parking|taxis?|coach|transit/i, target: 'Transportation::Public transit' },
+  { category: /theatrical|general\s*events|concert/i, target: 'Entertainment::Concerts/shows' },
+  { category: /health\s*care/i, target: 'Health/medical::Doctors/dental/vision' },
+  { category: /fees\s*&\s*adjustments/i, target: 'Debt::Credit cards' },
+  // Deliberately absent: "Internet Purchase". That is Amazon, Walmart.com and
+  // Target.com, which between them can be anything at all. The purpose is not
+  // in the file, so it goes to the catch-all rather than being invented.
 ]
 
-/** The line-item name a card category maps to, or null when unmatched. */
-export function targetForCategory(category) {
-  const c = String(category || '').toLowerCase()
-  if (!c) return null
-  for (const [pattern, target] of CATEGORY_RULES) {
-    if (pattern.test(c)) return target
+/** Two-letter state from the export's "City/State" cell, e.g. "CONWAY\nSC". */
+export function stateOf(location) {
+  const m = String(location || '').toUpperCase().match(/\b([A-Z]{2})\b\s*$/)
+  return m ? m[1] : ''
+}
+
+/** The target spec a transaction maps to, or null when nothing matches. */
+export function matchRule(row) {
+  for (const rule of RULES) {
+    if (rule.merchant && !rule.merchant.test(row.description || '')) continue
+    if (rule.category && !rule.category.test(row.category || '')) continue
+    if (!rule.merchant && !rule.category) continue
+    if (rule.byState) {
+      const target = rule.byState[row.state]
+      // An unrecognised state means the rule cannot decide; fall through to a
+      // later rule rather than picking one property arbitrarily.
+      if (!target) continue
+      return target
+    }
+    return rule.target
   }
   return null
 }
+
+/** Kept for callers that only have a category to go on. */
+export const targetForCategory = (category) => matchRule({ category, description: '', state: '' })
 
 // --- parse ------------------------------------------------------------------
 
@@ -202,14 +290,12 @@ export function parseStatement(input) {
 
     const description = String(at('description') ?? '').trim()
     const category = String(at('category') ?? '').trim()
+    const location = String(at('location') ?? '').trim()
+    const row = { year, month, amount, description, category, state: stateOf(location) }
 
     rows.push({
-      year,
-      month,
-      amount,
-      description,
-      category,
-      target: targetForCategory(category),
+      ...row,
+      target: matchRule(row),
       payment: isCardPayment(description),
     })
   }
@@ -263,12 +349,37 @@ export const CATCH_ALL_CATEGORY = 'Other'
  * bucket accounts for. The totals must reconcile — assigned + unmatched +
  * payments + wrongYear should equal the statement.
  */
-export function summarise(rows, data, { catchAll = true } = {}) {
-  const byName = new Map()
-  for (const item of data.items) {
-    const cat = data.categories.find((c) => c.id === item.categoryId)
-    if (cat?.kind === 'expense') byName.set(norm(item.name), item)
+/**
+ * Resolve a "Category::Item" spec against the budget's own line items.
+ *
+ * Returns { item } on a clean hit, or { ambiguous } when a bare name matches
+ * more than one expense line. Ambiguity is reported rather than resolved by
+ * picking one: five item names in this budget are duplicated across
+ * categories, and silently choosing would put money on a line at random.
+ */
+export function resolveTarget(data, spec) {
+  const expense = new Set(
+    data.categories.filter((c) => c.kind === 'expense').map((c) => c.id),
+  )
+  const catName = new Map(data.categories.map((c) => [c.id, norm(c.name)]))
+  const candidates = data.items.filter((i) => expense.has(i.categoryId))
+
+  const idx = String(spec || '').indexOf(TARGET_SEPARATOR)
+  if (idx >= 0) {
+    const wantCat = norm(spec.slice(0, idx))
+    const wantItem = norm(spec.slice(idx + TARGET_SEPARATOR.length))
+    const item = candidates.find(
+      (i) => norm(i.name) === wantItem && catName.get(i.categoryId) === wantCat,
+    )
+    return { item: item || null }
   }
+
+  const hits = candidates.filter((i) => norm(i.name) === norm(spec))
+  if (hits.length > 1) return { item: null, ambiguous: hits.length }
+  return { item: hits[0] || null }
+}
+
+export function summarise(rows, data, { catchAll = true } = {}) {
 
   const cells = new Map() // `${itemId}:${month}` -> total
   const unmatched = new Map() // category -> { total, count }
@@ -277,6 +388,7 @@ export function summarise(rows, data, { catchAll = true } = {}) {
   let wrongYear = 0
   let assigned = 0
   let swept = 0
+  const ambiguousTargets = new Set()
 
   for (const row of rows) {
     if (row.payment || row.amount < 0) {
@@ -297,7 +409,8 @@ export function summarise(rows, data, { catchAll = true } = {}) {
     }
 
     const targetName = row.target || CATCH_ALL_ITEM
-    const item = byName.get(norm(targetName))
+    const { item, ambiguous } = resolveTarget(data, targetName)
+    if (ambiguous) ambiguousTargets.add(targetName)
     if (!item) {
       const prev = missingItem.get(targetName) || { total: 0, count: 0 }
       missingItem.set(targetName, { total: prev.total + row.amount, count: prev.count + 1 })
@@ -328,6 +441,7 @@ export function summarise(rows, data, { catchAll = true } = {}) {
     // category. Reconciliation is assigned + payments + wrongYear + missingItem
     // (+ unmatched only when sweeping is off).
     catchAll,
+    ambiguousTargets: [...ambiguousTargets],
     totals: {
       assigned: round2(assigned),
       payments: round2(payments),

@@ -54,12 +54,14 @@ test('recognises card payments so they are never counted as spending', () => {
 })
 
 test('maps card categories only where the mapping is unambiguous', () => {
-  assert.equal(targetForCategory('Merchandise & Supplies-Groceries'), 'Groceries')
-  assert.equal(targetForCategory('Restaurant-Bar & Café'), 'Restaurants')
-  assert.equal(targetForCategory('Transportation-Fuel'), 'Fuel')
-  assert.equal(targetForCategory('Travel-Lodging'), 'Hotels')
+  // Targets are qualified "Category::Item" so a duplicated line-item name
+  // cannot resolve to the wrong category.
+  assert.equal(targetForCategory('Merchandise & Supplies-Groceries'), 'Everyday::Groceries')
+  assert.equal(targetForCategory('Restaurant-Bar & Café'), 'Everyday::Restaurants')
+  assert.equal(targetForCategory('Transportation-Fuel'), 'Transportation::Fuel')
+  assert.equal(targetForCategory('Travel-Lodging'), 'Travel::Hotels')
   // Deliberately unmapped: guessing here would move money between budget lines.
-  assert.equal(targetForCategory('Business Services-Other'), null)
+  assert.equal(targetForCategory('Merchandise & Supplies-Internet Purchase'), null)
   assert.equal(targetForCategory(''), null)
 })
 
@@ -175,7 +177,7 @@ test('a mapped category with no matching line item is reported, not invented', (
   const cat = makeCategory({ kind: 'expense', name: 'Everyday', order: 0 }, BORN)
   d.categories.push(cat)   // no Groceries item exists
   const s = summarise(parseStatement(CSV).rows, d)
-  assert.ok(s.missingItem.some((m) => m.name === 'Groceries'))
+  assert.ok(s.missingItem.some((m) => m.name === 'Everyday::Groceries'))
   assert.equal(s.cells.size, 0)
 })
 
@@ -377,4 +379,81 @@ test('a date held as an Excel serial is read as a date', () => {
   const r = parseStatement(csv)
   // From CSV it is text "46000", which is not a date — must not silently pass.
   assert.equal(r.rows.length, 0)
+})
+
+// --- rules -------------------------------------------------------------------
+
+import { matchRule, stateOf, resolveTarget, RULES } from '../src/lib/statement.js'
+
+const row = (over) => ({ description: '', category: '', state: '', ...over })
+
+test("Lowe's Foods is a grocery chain, not the hardware store", () => {
+  // A loose merchant rule once moved $240 of groceries onto Home Supplies.
+  // Merchant rules deliberately outrank card categories, so a sloppy one
+  // overrides a correct classification instead of merely adding to it.
+  assert.equal(
+    matchRule(row({ description: "LOWE'S FOODS #232 00MYRTLE BEACH", category: 'Merchandise & Supplies-Groceries' })),
+    'Everyday::Groceries',
+  )
+  assert.equal(
+    matchRule(row({ description: 'THE HOME DEPOT 1122 MURRELLS INLE', category: 'Merchandise & Supplies-Hardware Supplies' })),
+    'Home::Supplies',
+  )
+  assert.equal(
+    matchRule(row({ description: "LOWE'S              MYRTLE BEACH", category: 'Merchandise & Supplies-Hardware Supplies' })),
+    'Home::Supplies',
+  )
+})
+
+test('a merchant rule beats the card category when they disagree', () => {
+  // Amex files streaming under "Cable & Internet Comm"; the budget treats it
+  // as a subscription. The merchant is the stronger signal.
+  assert.equal(
+    matchRule(row({ description: 'NETFLIX.COM 866-579-7172', category: 'Communications-Cable & Internet Comm' })),
+    'Technology::Netflix/Paramount/Discovery',
+  )
+})
+
+test('one card category splits across budget lines by merchant', () => {
+  const utilities = 'Other-Utilities'
+  assert.equal(matchRule(row({ description: 'PSEG LI RESIDENTIAL NEWARK', category: utilities })), 'Utilities::Electricity')
+  assert.equal(matchRule(row({ description: 'GRAND STRAND WATER&SCONWAY', category: utilities })), 'Utilities::Water ( Surfside)')
+  assert.equal(matchRule(row({ description: 'DOMINION ENERGY - SCCAYCE', category: utilities })), 'Utilities::2nd home utilities')
+})
+
+test('location routes between per-property lines', () => {
+  const cable = 'Communications-Cable & Internet Comm'
+  assert.equal(matchRule(row({ description: 'OPTIMUM', category: cable, state: 'NY' })), 'Home::Internet/Cable (sayville)')
+  assert.equal(matchRule(row({ description: 'SPECTRUM', category: cable, state: 'SC' })), 'Home::Internet/Cable (Surfside)')
+  // An unrecognised state must not pick a property at random.
+  assert.equal(matchRule(row({ description: 'SPECTRUM', category: cable, state: 'TX' })), null)
+})
+
+test('state is read off the export cell', () => {
+  assert.equal(stateOf('CONWAY\nSC'), 'SC')
+  assert.equal(stateOf('SAYVILLE NY'), 'NY')
+  assert.equal(stateOf('866-579-7172'), '')
+  assert.equal(stateOf(''), '')
+})
+
+test('marketplace purchases stay unassigned — the purpose is not in the file', () => {
+  assert.equal(matchRule(row({ description: 'AMAZON MARKEPLACE NA PA', category: 'Merchandise & Supplies-Internet Purchase' })), null)
+  assert.equal(matchRule(row({ description: 'WALMART.COM BENTONVILLE', category: 'Merchandise & Supplies-Internet Purchase' })), null)
+})
+
+test('Plan It instalment fees are financing, not spending', () => {
+  assert.equal(matchRule(row({ description: 'PLAN FEE - THE HOME DEPOT', category: 'Fees & Adjustments-Fees & Adjustments' })), 'Debt::Credit cards')
+})
+
+test('a bare target name that matches several categories is refused, not guessed', () => {
+  const d = budget()
+  const pets = mkCat({ kind: 'expense', name: 'Pets', order: 8 }, BORN)
+  d.categories.push(pets)
+  d.items.push(mkItem({ categoryId: pets.id, name: 'Groceries', order: 0 }, BORN))
+  const r = resolveTarget(d, 'Groceries')
+  assert.equal(r.item, null)
+  assert.equal(r.ambiguous, 2)
+  // Qualified by category, it resolves cleanly.
+  assert.ok(resolveTarget(d, 'Everyday::Groceries').item)
+  assert.ok(resolveTarget(d, 'Pets::Groceries').item)
 })
