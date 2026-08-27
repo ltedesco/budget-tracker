@@ -774,3 +774,117 @@ test('dates are normalised to ISO whatever the card wrote', () => {
   d = applySummary(d, summarise(parseStatement(capone).rows, d), '2026-09-02T00:00:00Z', CARD_B)
   assert.deepEqual(d.transactions.map((t) => t.date).sort(), ['2026-03-01', '2026-03-28'])
 })
+
+// --- hand-entered transactions -----------------------------------------------
+
+import { addTransaction, removeTransaction, MANUAL_SOURCE, monthOfISO } from '../src/lib/ledger.js'
+
+const groceriesOf = (d) => d.items.find((i) => i.name === 'Groceries')
+
+test('a hand-entered transaction tallies into the month', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const id = groceriesOf(d).id
+  d = addTransaction(d, { itemId: id, date: '2026-02-11', amount: '84.20', desc: 'Farm stand' }).data
+  d = addTransaction(d, { itemId: id, date: '2026-02-19', amount: '15.80', desc: 'Bakery' }).data
+  assert.equal(groceriesOf(d).actual[1], 100)
+  assert.equal(groceriesOf(d).imported['1'][MANUAL_SOURCE], 100)
+  assert.equal(d.transactions.filter((t) => t.source === MANUAL_SOURCE).length, 2)
+})
+
+test('hand entries add to a card rather than replacing it', () => {
+  const csv = `Date,Description,Amount,Category
+02/04/2026,WHOLEFDS MARKET,200.00,Merchandise & Supplies-Groceries`
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  const id = groceriesOf(d).id
+  d = addTransaction(d, { itemId: id, date: '2026-02-11', amount: '50', desc: 'Cash at market' }).data
+
+  assert.equal(groceriesOf(d).actual[1], 250)
+  assert.deepEqual(groceriesOf(d).imported['1'], { [CARD_A]: 200, [MANUAL_SOURCE]: 50 })
+})
+
+test('re-importing a card leaves hand entries alone', () => {
+  const csv = `Date,Description,Amount,Category
+02/04/2026,WHOLEFDS MARKET,200.00,Merchandise & Supplies-Groceries`
+  const corrected = `Date,Description,Amount,Category
+02/04/2026,WHOLEFDS MARKET,180.00,Merchandise & Supplies-Groceries`
+
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  const id = groceriesOf(d).id
+  d = addTransaction(d, { itemId: id, date: '2026-02-11', amount: '50', desc: 'Cash' }).data
+  d = applySummary(d, summarise(parseStatement(corrected).rows, d), '2026-09-02T00:00:00Z', CARD_A)
+
+  assert.equal(groceriesOf(d).actual[1], 230, 'card share updated, hand entry kept')
+  assert.equal(d.transactions.filter((t) => t.source === MANUAL_SOURCE).length, 1)
+})
+
+test('removing a hand entry recomputes the month', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const id = groceriesOf(d).id
+  const first = addTransaction(d, { itemId: id, date: '2026-03-01', amount: '30', desc: 'A' })
+  d = first.data
+  d = addTransaction(d, { itemId: id, date: '2026-03-02', amount: '70', desc: 'B' }).data
+  assert.equal(groceriesOf(d).actual[2], 100)
+
+  d = removeTransaction(d, first.transaction.id)
+  assert.equal(groceriesOf(d).actual[2], 70)
+
+  d = removeTransaction(d, d.transactions.find((t) => t.source === MANUAL_SOURCE).id)
+  assert.equal(groceriesOf(d).actual[2], null, 'an emptied cell goes blank, not zero')
+})
+
+test('adding an entry takes a typed-over cell back under the ledger', () => {
+  const csv = `Date,Description,Amount,Category
+02/04/2026,WHOLEFDS MARKET,200.00,Merchandise & Supplies-Groceries`
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  // Someone types over February.
+  d = { ...d, items: d.items.map((i) => (i.name === 'Groceries' ? setCell(i, 'actual', 1, '999') : i)) }
+  assert.equal(groceriesOf(d).actual[1], 999)
+  assert.equal(groceriesOf(d).imported['1'], undefined)
+
+  d = addTransaction(d, { itemId: groceriesOf(d).id, date: '2026-02-11', amount: '50', desc: 'Cash' }).data
+  assert.equal(groceriesOf(d).actual[1], 50, 'the figure is rebuilt from what is recorded')
+})
+
+test('a date outside the budget year is refused, with a reason', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const id = groceriesOf(d).id
+  assert.match(addTransaction(d, { itemId: id, date: '2025-02-11', amount: '10' }).error, /not in 2026/)
+  assert.match(addTransaction(d, { itemId: id, date: 'sometime', amount: '10' }).error, /YYYY-MM-DD/)
+  assert.match(addTransaction(d, { itemId: id, date: '2026-02-11', amount: '' }).error, /amount/i)
+  assert.equal(d.transactions.length, 0, 'nothing is written when the entry is refused')
+})
+
+test('a refund can be entered as a negative amount', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const id = groceriesOf(d).id
+  d = addTransaction(d, { itemId: id, date: '2026-04-01', amount: '120', desc: 'Shop' }).data
+  d = addTransaction(d, { itemId: id, date: '2026-04-08', amount: '-20', desc: 'Returned' }).data
+  assert.equal(groceriesOf(d).actual[3], 100)
+})
+
+test('month is read off the ISO date', () => {
+  assert.equal(monthOfISO('2026-01-04'), 0)
+  assert.equal(monthOfISO('2026-12-31'), 11)
+  assert.equal(monthOfISO('2026-13-01'), null)
+  assert.equal(monthOfISO('nope'), null)
+})
+
+test('leap years are handled when bounding the date picker', () => {
+  // February 2028 has 29 days; a picker capped at 28 would refuse a real date.
+  const daysIn = (year, month) => new Date(Date.UTC(Number(year), month + 1, 0)).getUTCDate()
+  assert.equal(daysIn(2028, 1), 29)
+  assert.equal(daysIn(2026, 1), 28)
+  assert.equal(daysIn(2026, 0), 31)
+  assert.equal(daysIn(2026, 3), 30)
+})
+
+test('an entry dated outside the budget year never reaches the ledger', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const before = d.transactions.length
+  const r = addTransaction(d, { itemId: groceriesOf(d).id, date: '2027-02-11', amount: '10' })
+  assert.ok(r.error)
+  assert.equal(r.data.transactions.length, before)
+})

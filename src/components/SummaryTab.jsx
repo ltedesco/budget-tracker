@@ -6,12 +6,15 @@ import {
 import { MONTHS } from '../lib/model.js'
 import { summaryFor, chartSeries, topCategories, monthsWithActuals, actualCoverage } from '../lib/summary.js'
 import { money, moneyShort, signed } from '../lib/format.js'
+import { chartColors } from '../lib/theme.js'
 
-// Colours carry series identity in the charts, but every series is also
-// readable from the tables below, so nothing depends on colour alone.
-const INK = { income: '#2f6f5e', expense: '#b4552d', balance: '#3d5a80', muted: '#6b7480' }
+// Colours carry series identity in the charts, but every series is also named
+// in the legend and readable from the tables below, so nothing depends on
+// colour alone — which is what makes the colour-vision separation a floor
+// rather than the only safeguard.
 
-export default function SummaryTab({ data, layer }) {
+export default function SummaryTab({ data, layer, theme = 'light' }) {
+  const INK = useMemo(() => chartColors(theme), [theme])
   const planned = useMemo(() => summaryFor(data, 'planned'), [data])
   const actual = useMemo(() => summaryFor(data, 'actual'), [data])
   const series = useMemo(() => chartSeries(data), [data])
@@ -54,10 +57,14 @@ export default function SummaryTab({ data, layer }) {
         <div style={{ width: '100%', height: 260 }}>
           <ResponsiveContainer>
             <ComposedChart data={series} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e5ea" vertical={false} />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} tickFormatter={moneyShort} width={70} />
-              <Tooltip formatter={(v, n) => [money(v), n]} />
+              <CartesianGrid strokeDasharray="3 3" stroke={INK.grid} vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 12, fill: INK.axis }} stroke={INK.grid} />
+              <YAxis tick={{ fontSize: 12, fill: INK.axis }} stroke={INK.grid} tickFormatter={moneyShort} width={70} />
+              <Tooltip
+                formatter={(v, n) => [money(v), n]}
+                contentStyle={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 8, color: 'var(--text)' }}
+                labelStyle={{ color: 'var(--muted)' }}
+              />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar
                 dataKey={layer === 'actual' ? 'actualIncome' : 'plannedIncome'}
@@ -111,7 +118,7 @@ export default function SummaryTab({ data, layer }) {
       <div className="split">
         <div className="panel">
           <h2>Largest expense categories — {label.toLowerCase()}</h2>
-          <TopList data={data} layer={layer} />
+          <TopList data={data} layer={layer} ink={INK} />
         </div>
 
         <div className="panel">
@@ -179,7 +186,7 @@ function CompareRow({ label, planned, actual, kind }) {
   )
 }
 
-function TopList({ data, layer }) {
+function TopList({ data, layer, ink }) {
   const rows = topCategories(data, layer)
   if (!rows.length) return <p className="empty-state">Nothing recorded on this layer yet.</p>
   const max = rows[0].total
@@ -191,7 +198,7 @@ function TopList({ data, layer }) {
           <span className="bar-track">
             <span
               className="bar-fill"
-              style={{ width: `${Math.max(2, (r.total / max) * 100)}%`, background: INK.expense }}
+              style={{ width: `${Math.max(2, (r.total / max) * 100)}%`, background: ink.expense }}
             />
           </span>
           <span className="num" style={{ fontVariantNumeric: 'tabular-nums' }}>{moneyShort(r.total)}</span>

@@ -1,9 +1,17 @@
+import { useState } from 'react'
 import Modal from './Modal.jsx'
 import { MONTHS } from '../lib/model.js'
 import { money } from '../lib/format.js'
 import { ISSUER_LABELS } from '../lib/statement.js'
+import { isManual, MANUAL_SOURCE, monthOfISO } from '../lib/ledger.js'
+
+const pad = (n) => String(n).padStart(2, '0')
+
+/** Day count for the month, so the picker cannot offer a date outside it. */
+const daysIn = (year, month) => new Date(Date.UTC(Number(year), month + 1, 0)).getUTCDate()
 
 const sourceLabel = (source) => {
+  if (source === MANUAL_SOURCE) return 'Entered by hand'
   const [issuer, account] = String(source || '').split(':')
   const name = ISSUER_LABELS[issuer] || issuer || 'Import'
   return account ? `${name} ···${account}` : name
@@ -17,7 +25,28 @@ const sourceLabel = (source) => {
  * list. Rows carry the card's own category alongside the description, because
  * that pairing is what shows whether a rule misfired.
  */
-export default function CellDetail({ data, item, category, month, onClose }) {
+export default function CellDetail({ data, item, category, month, onClose, onAdd, onRemove }) {
+  const [date, setDate] = useState(`${data.year}-${pad(month + 1)}-01`)
+  const [desc, setDesc] = useState('')
+  const [amount, setAmount] = useState('')
+  const [error, setError] = useState('')
+
+  const submit = (e) => {
+    e.preventDefault()
+    // The entry has to belong to the month being looked at. Letting it land in
+    // another month would be worse than an error: it would disappear from the
+    // list that was open, looking as though nothing had been saved.
+    if (monthOfISO(date) !== month) {
+      setError(`That date is not in ${MONTHS[month]}. Open that month to add it there.`)
+      return
+    }
+    const problem = onAdd({ date, desc, amount })
+    if (problem) { setError(problem); return }
+    setError('')
+    setDesc('')
+    setAmount('')
+  }
+
   const rows = (data.transactions || [])
     .filter((t) => t.itemId === item.id && t.month === month)
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.amount - a.amount))
@@ -36,12 +65,13 @@ export default function CellDetail({ data, item, category, month, onClose }) {
       onClose={onClose}
     >
       {rows.length === 0 ? (
-        <p className="empty-state" style={{ textAlign: 'left' }}>
+        <p className="small muted" style={{ marginTop: 0 }}>
           {recorded === null || recorded === undefined
-            ? 'Nothing recorded for this month.'
-            : `${money(recorded)} is recorded here, but there are no transactions behind it — ` +
-              'it was either typed in by hand or imported before transaction history was kept. ' +
-              'Re-import the statement for this month to see the detail.'}
+            ? 'Nothing recorded for this month yet. Add what you spent below — useful where an ' +
+              'account only gives you a PDF statement and there is nothing to import.'
+            : `${money(recorded)} is recorded here with no transactions behind it — it was typed ` +
+              'in, or imported before transaction history was kept. Adding entries below rebuilds ' +
+              'the figure from them.'}
         </p>
       ) : (
         <>
@@ -51,8 +81,9 @@ export default function CellDetail({ data, item, category, month, onClose }) {
                 <tr>
                   <th>Date</th>
                   <th>Description</th>
-                  <th>Card category</th>
+                  <th className="col-source">Source</th>
                   <th className="num">Amount</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -60,8 +91,23 @@ export default function CellDetail({ data, item, category, month, onClose }) {
                   <tr key={t.id}>
                     <td className="tiny muted" style={{ whiteSpace: 'nowrap' }}>{t.date}</td>
                     <td>{t.desc}</td>
-                    <td className="tiny muted">{t.cardCategory || '—'}</td>
+                    <td className="tiny muted col-source">{isManual(t) ? 'by hand' : t.cardCategory || '—'}</td>
                     <td className={`num ${t.amount < 0 ? 'up' : ''}`}>{money(t.amount)}</td>
+                    <td style={{ width: 28 }}>
+                      {/* Only hand entries can be removed here. A card's rows are
+                          the statement's record; correcting those means fixing a
+                          rule and re-importing. */}
+                      {isManual(t) && (
+                        <button
+                          className="link danger"
+                          title="Remove this entry"
+                          aria-label={`Remove ${t.desc}`}
+                          onClick={() => onRemove(t.id)}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 <tr>
@@ -69,6 +115,7 @@ export default function CellDetail({ data, item, category, month, onClose }) {
                     {rows.length} transaction{rows.length === 1 ? '' : 's'}
                   </th>
                   <td className="num"><strong>{money(total)}</strong></td>
+                  <td />
                 </tr>
               </tbody>
             </table>
@@ -85,12 +132,48 @@ export default function CellDetail({ data, item, category, month, onClose }) {
             </p>
           )}
 
-          <p className="small muted" style={{ marginBottom: 0 }}>
+          <p className="small muted">
             Something in the wrong place? Say which merchant and where it belongs, and the rule
             can be corrected — then re-import to move every month at once.
           </p>
         </>
       )}
+
+      <form onSubmit={submit} style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+        <h2 style={{ fontSize: 15, margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.02em', color: 'var(--muted)' }}>
+          Add a transaction
+        </h2>
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          <label className="field">
+            <span>Date</span>
+            <input
+              type="date"
+              value={date}
+              min={`${data.year}-${pad(month + 1)}-01`}
+              max={`${data.year}-${pad(month + 1)}-${pad(daysIn(data.year, month))}`}
+              onChange={(e) => setDate(e.target.value)}
+              style={{ width: 160 }}
+            />
+          </label>
+          <label className="field grow">
+            <span>Description</span>
+            <input value={desc} placeholder="What was it?" onChange={(e) => setDesc(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Amount</span>
+            <input
+              inputMode="decimal" value={amount} placeholder="0.00" style={{ width: 120 }}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </label>
+          <button className="primary" type="submit">Add</button>
+        </div>
+        {error && <p className="small err" style={{ marginBottom: 0 }}>{error}</p>}
+        <p className="tiny muted" style={{ marginBottom: 0 }}>
+          Adds to this month's figure alongside anything imported, and survives a card
+          re-import. A refund goes in as a negative amount.
+        </p>
+      </form>
     </Modal>
   )
 }

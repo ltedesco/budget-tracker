@@ -143,7 +143,11 @@ export default function BudgetGrid({ data, kind, layer, actions, collapsed, onTo
                               onNavigate={(dir) => navigate(item.id, i, dir)}
                               inspectMode={inspectMode}
                               onInspect={
-                                layer === 'actual' && hasDetail(data, item.id, i)
+                                // In inspect mode every actual cell opens, including
+                                // empty ones — that is where a hand-entered month
+                                // starts. Outside it, only cells with something to
+                                // show carry the alt-click affordance.
+                                layer === 'actual' && (inspectMode || hasDetail(data, item.id, i))
                                   ? () => setDetail({ item, category: cat, month: i })
                                   : undefined
                               }
@@ -196,10 +200,12 @@ export default function BudgetGrid({ data, kind, layer, actions, collapsed, onTo
       {detail && (
         <CellDetail
           data={data}
-          item={detail.item}
+          item={data.items.find((i) => i.id === detail.item.id) || detail.item}
           category={detail.category}
           month={detail.month}
           onClose={() => setDetail(null)}
+          onAdd={(entry) => actions.addTransaction({ ...entry, itemId: detail.item.id })}
+          onRemove={(id) => actions.removeTransaction(id)}
         />
       )}
 

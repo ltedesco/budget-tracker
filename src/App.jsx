@@ -9,8 +9,10 @@ import {
 } from './lib/model.js'
 import { templateData } from './lib/template.js'
 import { money } from './lib/format.js'
+import { applyTheme, resolveTheme, THEMES } from './lib/theme.js'
 import { itemsOf } from './lib/summary.js'
 import { ensureCatchAll } from './lib/statement.js'
+import { addTransaction, removeTransaction } from './lib/ledger.js'
 import { pullMerged, pushMerged } from './lib/sync.js'
 import { decryptToken, encryptToken, makeSetupCode, readSetupCode } from './lib/crypto.js'
 import {
@@ -51,6 +53,8 @@ export default function App() {
   const [prefs, setPrefs] = useState(loadPrefs)
   const [toast, setToast] = useState(null)
 
+  const themeChoice = THEMES.includes(prefs.theme) ? prefs.theme : 'system'
+  const [resolvedTheme, setResolvedTheme] = useState(() => resolveTheme(themeChoice))
   const layer = prefs.layer === 'actual' || prefs.layer === 'variance' ? prefs.layer : 'planned'
   const collapsed = prefs.collapsed || {}
 
@@ -65,6 +69,19 @@ export default function App() {
   useEffect(() => { dataRef.current = data; saveLocal(data) }, [data])
   useEffect(() => { saveSyncConfig(sync) }, [sync])
   useEffect(() => { savePrefs(prefs) }, [prefs])
+
+  // Apply the choice, and keep following the system while 'system' is selected —
+  // otherwise the page stays light when the phone flips to dark at sunset.
+  useEffect(() => {
+    applyTheme(themeChoice)
+    setResolvedTheme(resolveTheme(themeChoice))
+    if (themeChoice !== 'system') return
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!media?.addEventListener) return
+    const onChange = () => setResolvedTheme(resolveTheme('system'))
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [themeChoice])
   useEffect(() => { tokenRef.current = token; saveSessionToken(token) }, [token])
   useEffect(() => () => clearTimeout(toastTimer.current), [])
 
@@ -298,6 +315,22 @@ export default function App() {
       prepareForStatement: () =>
         ensureCatchAll(d(), { category: makeCategory, item: makeItem }),
 
+      /**
+       * Hand-entered transactions. Returns an error string for the form to
+       * show rather than throwing, since a bad date is a normal thing to type.
+       */
+      addTransaction: (entry) => {
+        const result = addTransaction(d(), entry)
+        if (result.error) return result.error
+        commit(result.data, `Added ${money(result.transaction.amount)} — ${result.transaction.desc}.`)
+        return ''
+      },
+
+      removeTransaction: (id) => {
+        const row = (d().transactions || []).find((t) => t.id === id)
+        commit(removeTransaction(d(), id), row ? `Removed "${row.desc}".` : 'Removed.', true)
+      },
+
       setSync: setSyncField,
 
       /** Encrypt the token under a passphrase and keep it unlocked for this tab. */
@@ -373,6 +406,18 @@ export default function App() {
       <header className="app-head">
         <h1>Budget {data.year}</h1>
         <span className="sync-state">{syncStatus.error ? <span className="err">{syncStatus.error}</span> : syncLabel}</span>
+        <div className="theme-switch" role="group" aria-label="Colour theme">
+          {THEMES.map((choice) => (
+            <button
+              key={choice}
+              aria-pressed={themeChoice === choice}
+              onClick={() => setPrefs((p) => ({ ...p, theme: choice }))}
+              title={choice === 'system' ? 'Follow the device setting' : `Always ${choice}`}
+            >
+              {choice === 'system' ? 'Auto' : choice[0].toUpperCase() + choice.slice(1)}
+            </button>
+          ))}
+        </div>
       </header>
 
       <nav className="tabs">
@@ -395,11 +440,14 @@ export default function App() {
           <span className="small muted">
             {layer === 'planned' && 'Editing the plan — what you expect for each month.'}
             {layer === 'actual' && !prefs.inspect && 'Editing actuals — what really happened.'}
-            {layer === 'actual' && prefs.inspect && 'Tap any figure to see the transactions behind it.'}
+            {layer === 'actual' && prefs.inspect && 'Tap any figure to see or add the transactions behind it.'}
             {layer === 'variance' && 'Read-only: actual minus planned.'}
           </span>
 
-          {tab !== 'summary' && layer === 'actual' && (data.transactions || []).length > 0 && (
+          {/* Always offered on the actual layer, not only once transactions
+              exist: opening a cell is also how one gets added, so gating it on
+              having some made an empty budget impossible to fill in by hand. */}
+          {tab !== 'summary' && layer === 'actual' && (
             <label
               className="small"
               style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}
@@ -410,14 +458,14 @@ export default function App() {
                 style={{ width: 'auto' }}
                 onChange={(e) => setInspect(e.target.checked)}
               />
-              Show transactions
+              Transactions
             </label>
           )}
         </div>
       )}
 
       {tab === 'summary' && (
-        <SummaryTab data={data} layer={layer === 'variance' ? 'planned' : layer} />
+        <SummaryTab data={data} layer={layer === 'variance' ? 'planned' : layer} theme={resolvedTheme} />
       )}
 
       {(tab === 'expenses' || tab === 'income') && (
