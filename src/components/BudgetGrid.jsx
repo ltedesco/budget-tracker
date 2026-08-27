@@ -189,19 +189,8 @@ export default function BudgetGrid({ data, kind, layer, actions, collapsed, onTo
         </table>
       </div>
 
-      <div className="row" style={{ marginTop: 12, alignItems: 'center', gap: 12 }}>
+      <div className="row" style={{ marginTop: 12 }}>
         <button onClick={() => actions.addCategory(kind)}>+ Add category</button>
-        {layer === 'actual' && (data.transactions || []).length > 0 && (
-          <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={Boolean(inspectMode)}
-              style={{ width: 'auto' }}
-              onChange={(e) => onInspectMode(e.target.checked)}
-            />
-            Tap a figure to see its transactions
-          </label>
-        )}
       </div>
 
       {detail && (

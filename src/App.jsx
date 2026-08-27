@@ -394,9 +394,25 @@ export default function App() {
           </div>
           <span className="small muted">
             {layer === 'planned' && 'Editing the plan — what you expect for each month.'}
-            {layer === 'actual' && 'Editing actuals — what really happened.'}
+            {layer === 'actual' && !prefs.inspect && 'Editing actuals — what really happened.'}
+            {layer === 'actual' && prefs.inspect && 'Tap any figure to see the transactions behind it.'}
             {layer === 'variance' && 'Read-only: actual minus planned.'}
           </span>
+
+          {tab !== 'summary' && layer === 'actual' && (data.transactions || []).length > 0 && (
+            <label
+              className="small"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}
+            >
+              <input
+                type="checkbox"
+                checked={Boolean(prefs.inspect)}
+                style={{ width: 'auto' }}
+                onChange={(e) => setInspect(e.target.checked)}
+              />
+              Show transactions
+            </label>
+          )}
         </div>
       )}
 
