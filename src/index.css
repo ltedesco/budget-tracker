@@ -298,3 +298,19 @@ th.derived { text-align: right; }
 
 .lock-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .lock-card { width: min(420px, 100%); margin: 0; }
+
+.cat-filter { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; align-items: flex-start; }
+.cat-filter > .link { padding-left: 0; }
+.cat-filter-group { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; align-self: stretch; }
+.cat-filter-label { min-width: 62px; text-transform: uppercase; letter-spacing: 0.04em; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 240px; }
+.filter-chip {
+  padding: 4px 11px; border-radius: 999px; font-size: 13px; line-height: 1.35;
+  background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+}
+.filter-chip:hover:not([aria-pressed="true"]) { border-color: var(--muted); color: var(--text); }
+/* Selected state carries a border and weight change as well as colour, so it
+   does not rest on colour alone. */
+.filter-chip[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600;
+}

@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { emptyData, makeCategory, makeItem } from '../src/lib/model.js'
+import { emptyData, makeCategory, makeItem, sumMonths } from '../src/lib/model.js'
 import {
   summaryFor, variance, average, monthsWithActuals, rollup, budgetCSV, chartSeries,
+  kindMonths, resolveSelection,
 } from '../src/lib/summary.js'
 
 const BORN = '2026-01-01T00:00:00.000Z'
@@ -103,4 +104,82 @@ test('CSV export quotes fields containing commas', () => {
   assert.match(csv, /"Home, primary"/)
   assert.match(csv.split('\n')[0], /^Kind,Category,Line item,Layer,Jan,/)
   assert.match(csv, /Summary \(planned\)/)
+})
+
+// --- category filter on the chart -------------------------------------------
+
+test('kindMonths narrows to the selected categories', () => {
+  const d = fixture()
+  const debt = d.categories.find((c) => c.name === 'Debt')
+  const only = new Set([debt.id])
+  const all = kindMonths(d, 'expense', 'planned')
+  const some = kindMonths(d, 'expense', 'planned', only)
+  assert.equal(some[0], PHONE, 'Debt holds only the phone line')
+  assert.ok(sumMonths(some) < sumMonths(all), 'a filter must remove something')
+})
+
+test('selecting only expense categories zeroes the income series', () => {
+  const d = fixture()
+  const debt = d.categories.find((c) => c.name === 'Debt')
+  const view = summaryFor(d, 'planned', new Set([debt.id]))
+  assert.equal(view.totals.income, 0, 'no income category is selected, so no income')
+  assert.equal(view.totals.expenses, PHONE * 12)
+})
+
+test('an empty selection means nothing, not everything', () => {
+  const d = fixture()
+  const view = summaryFor(d, 'planned', new Set())
+  assert.equal(view.totals.income, 0)
+  assert.equal(view.totals.expenses, 0)
+})
+
+test('the ending balance is flagged as meaningless once filtered', () => {
+  const d = fixture()
+  const debt = d.categories.find((c) => c.name === 'Debt')
+  assert.equal(summaryFor(d, 'planned').endingIsMeaningful, true)
+  assert.equal(summaryFor(d, 'planned', new Set([debt.id])).endingIsMeaningful, false)
+})
+
+test('the filtered chart series matches the filtered summary', () => {
+  const d = fixture()
+  const debt = d.categories.find((c) => c.name === 'Debt')
+  const only = new Set([debt.id])
+  const rows = chartSeries(d, only)
+  const view = summaryFor(d, 'planned', only)
+  assert.equal(rows.length, 12)
+  rows.forEach((row, i) => {
+    assert.equal(row.plannedExpenses, view.expenses[i])
+    assert.equal(row.plannedIncome, view.income[i])
+  })
+})
+
+test('an unfiltered chart is unchanged by the new argument', () => {
+  const d = fixture()
+  assert.deepEqual(chartSeries(d), chartSeries(d, null))
+})
+
+// --- resolveSelection --------------------------------------------------------
+
+test('no selection resolves to no filter', () => {
+  const d = fixture()
+  assert.equal(resolveSelection(d, []), null)
+  assert.equal(resolveSelection(d, null), null)
+  assert.equal(resolveSelection(d, undefined), null)
+})
+
+test('selecting every category is not a filter', () => {
+  const d = fixture()
+  assert.equal(resolveSelection(d, d.categories.map((c) => c.id)), null)
+})
+
+test('ids of deleted categories are dropped rather than blanking the chart', () => {
+  const d = fixture()
+  const debt = d.categories.find((c) => c.name === 'Debt')
+  const only = resolveSelection(d, [debt.id, 'a-category-since-deleted'])
+  assert.deepEqual([...only], [debt.id], 'the live one survives on its own')
+})
+
+test('a selection of only dead ids falls back to showing everything', () => {
+  // Better than an empty chart with no explanation: the filter is simply gone.
+  assert.equal(resolveSelection(fixture(), ['gone-1', 'gone-2']), null)
 })

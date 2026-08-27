@@ -28,9 +28,16 @@ export function categoryMonths(data, categoryId, layer) {
   return out
 }
 
-/** Per-month totals across every category of one kind. */
-export function kindMonths(data, kind, layer) {
-  const ids = new Set(categoriesOf(data, kind).map((c) => c.id))
+/**
+ * Per-month totals across every category of one kind.
+ *
+ * `only` narrows it to a chosen set of category ids. Null means everything —
+ * deliberately not "an empty set means everything", since a caller that has
+ * genuinely selected nothing should get zeros rather than the whole budget.
+ */
+export function kindMonths(data, kind, layer, only = null) {
+  let ids = new Set(categoriesOf(data, kind).map((c) => c.id))
+  if (only) ids = new Set([...ids].filter((id) => only.has(id)))
   const out = zeros()
   for (const it of data.items) {
     if (!ids.has(it.categoryId)) continue
@@ -44,9 +51,9 @@ export function kindMonths(data, kind, layer) {
  * The whole summary for one layer: income, expenses, net savings per month,
  * and the ending balance carried forward month to month.
  */
-export function summaryFor(data, layer) {
-  const income = kindMonths(data, 'income', layer)
-  const expenses = kindMonths(data, 'expense', layer)
+export function summaryFor(data, layer, only = null) {
+  const income = kindMonths(data, 'income', layer, only)
+  const expenses = kindMonths(data, 'expense', layer, only)
   const net = zeros()
   const ending = zeros()
 
@@ -62,6 +69,11 @@ export function summaryFor(data, layer) {
     expenses,
     net,
     ending,
+    // A running balance means nothing once categories are excluded: it would
+    // be the starting balance plus part of the year's movement, which is not
+    // the balance of anything. Computed anyway so the shape stays constant,
+    // and flagged so no caller can show it by accident.
+    endingIsMeaningful: only === null,
     totals: {
       income: sumMonths(income),
       expenses: sumMonths(expenses),
@@ -128,9 +140,9 @@ export function topCategories(data, layer, limit = 6) {
 }
 
 /** Chart-ready series: one row per month with both layers. */
-export function chartSeries(data) {
-  const planned = summaryFor(data, 'planned')
-  const actual = summaryFor(data, 'actual')
+export function chartSeries(data, only = null) {
+  const planned = summaryFor(data, 'planned', only)
+  const actual = summaryFor(data, 'actual', only)
   return MONTHS.map((label, i) => ({
     month: label,
     plannedIncome: planned.income[i],
@@ -140,6 +152,22 @@ export function chartSeries(data) {
     plannedEnding: planned.ending[i],
     actualEnding: actual.ending[i],
   }))
+}
+
+/**
+ * Turn a stored selection into something safe to compute with.
+ *
+ * Ids of categories that no longer exist are dropped, so a filter saved before
+ * a category was deleted quietly narrows rather than silently showing nothing.
+ * Returns null — meaning "no filter" — when the selection covers everything or
+ * matches nothing real, because a filter that excludes nothing is not a filter.
+ */
+export function resolveSelection(data, ids) {
+  if (!ids || !ids.length) return null
+  const live = new Set(data.categories.map((c) => c.id))
+  const kept = ids.filter((id) => live.has(id))
+  if (!kept.length || kept.length === data.categories.length) return null
+  return new Set(kept)
 }
 
 // --- export -----------------------------------------------------------------

@@ -4,7 +4,8 @@ import {
   CartesianGrid, Tooltip, Legend,
 } from 'recharts'
 import { MONTHS } from '../lib/model.js'
-import { summaryFor, chartSeries, topCategories, monthsWithActuals, actualCoverage } from '../lib/summary.js'
+import { summaryFor, chartSeries, topCategories, monthsWithActuals, actualCoverage, resolveSelection } from '../lib/summary.js'
+import CategoryFilter from './CategoryFilter.jsx'
 import { backupMessage } from '../lib/backup.js'
 import { money, moneyShort, signed } from '../lib/format.js'
 import { chartColors } from '../lib/theme.js'
@@ -14,11 +15,17 @@ import { chartColors } from '../lib/theme.js'
 // colour alone — which is what makes the colour-vision separation a floor
 // rather than the only safeguard.
 
-export default function SummaryTab({ data, layer, theme = 'light', backup, onGoToBackup }) {
+export default function SummaryTab({
+  data, layer, theme = 'light', backup, onGoToBackup, chartFilter = [], onChartFilter,
+}) {
   const INK = useMemo(() => chartColors(theme), [theme])
   const planned = useMemo(() => summaryFor(data, 'planned'), [data])
   const actual = useMemo(() => summaryFor(data, 'actual'), [data])
-  const series = useMemo(() => chartSeries(data), [data])
+  // Ids of categories deleted since the filter was saved are dropped here, and
+  // a selection covering everything resolves back to no filter at all.
+  const only = useMemo(() => resolveSelection(data, chartFilter), [data, chartFilter])
+  const series = useMemo(() => chartSeries(data, only), [data, only])
+  const filtered = useMemo(() => (only ? summaryFor(data, layer, only) : null), [data, layer, only])
   const withActuals = useMemo(() => monthsWithActuals(data), [data])
   const coverage = useMemo(() => actualCoverage(data), [data])
 
@@ -67,7 +74,26 @@ export default function SummaryTab({ data, layer, theme = 'light', backup, onGoT
       )}
 
       <div className="panel">
-        <h2>Income vs expenses — {label.toLowerCase()}</h2>
+        <h2>
+          Income vs expenses — {label.toLowerCase()}
+          {only && <> · {only.size} of {data.categories.length} categories</>}
+        </h2>
+
+        {onChartFilter && (
+          <CategoryFilter data={data} selected={chartFilter} onChange={onChartFilter} />
+        )}
+
+        {filtered && (
+          <p className="small muted" style={{ marginTop: -4 }}>
+            Selected {label.toLowerCase()}: <strong>{money(filtered.totals.income)}</strong> in,{' '}
+            <strong>{money(filtered.totals.expenses)}</strong> out.{' '}
+            {/* The line is dropped rather than redrawn from part of the year:
+                a starting balance plus a subset of movement is not a balance. */}
+            The ending balance line is hidden while a filter is on — a running balance built from
+            only some categories would not be the balance of anything.
+          </p>
+        )}
+
         <div style={{ width: '100%', height: 260 }}>
           <ResponsiveContainer>
             <ComposedChart data={series} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
@@ -88,11 +114,13 @@ export default function SummaryTab({ data, layer, theme = 'light', backup, onGoT
                 dataKey={layer === 'actual' ? 'actualExpenses' : 'plannedExpenses'}
                 name="Expenses" fill={INK.expense} radius={[3, 3, 0, 0]}
               />
-              <Line
-                type="monotone"
-                dataKey={layer === 'actual' ? 'actualEnding' : 'plannedEnding'}
-                name="Ending balance" stroke={INK.balance} strokeWidth={2} dot={false}
-              />
+              {!only && (
+                <Line
+                  type="monotone"
+                  dataKey={layer === 'actual' ? 'actualEnding' : 'plannedEnding'}
+                  name="Ending balance" stroke={INK.balance} strokeWidth={2} dot={false}
+                />
+              )}
             </ComposedChart>
           </ResponsiveContainer>
         </div>

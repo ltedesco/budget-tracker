@@ -552,6 +552,9 @@ export default function App() {
 
   const setLayer = useCallback((next) => setPrefs((p) => ({ ...p, layer: next })), [])
   const setInspect = useCallback((on) => setPrefs((p) => ({ ...p, inspect: on })), [])
+  // Kept in prefs so a chosen view survives a reload. Per device, not synced:
+  // which categories you are looking at is not part of the budget.
+  const setChartFilter = useCallback((ids) => setPrefs((p) => ({ ...p, chartFilter: ids })), [])
 
   const syncLabel = !sync.tokenEnc && !token
     ? 'Sync off'
@@ -643,6 +646,8 @@ export default function App() {
           theme={resolvedTheme}
           backup={backup}
           onGoToBackup={() => setTab('data')}
+          chartFilter={prefs.chartFilter || []}
+          onChartFilter={setChartFilter}
         />
       )}
 
