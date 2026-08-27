@@ -11,6 +11,7 @@
 
 import Papa from 'papaparse'
 import { MONTHS } from './model.js'
+import { readWorkbook, serialToISO } from './xlsx.js'
 
 // --- column detection -------------------------------------------------------
 //
@@ -24,6 +25,27 @@ const HEADER_PATTERNS = {
   amount: [/^amount$/i, /^debit/i],
   category: [/^category$/i, /^type$/i],
   reference: [/^reference$/i, /^transaction id/i],
+}
+
+/**
+ * Locate the header row in a matrix.
+ *
+ * Real exports do not start with the header. An Amex workbook opens with six
+ * rows of preamble — the card name, who it is prepared for, the account
+ * number — before the column titles appear. Assuming row 1 is why a genuine
+ * export was rejected while a hand-made test file parsed cleanly, so the row
+ * is found by looking for one that names both a date and an amount.
+ */
+export function findHeaderRow(matrix) {
+  const limit = Math.min(matrix.length, 40)
+  for (let i = 0; i < limit; i++) {
+    const cells = (matrix[i] || []).map((c) => String(c ?? '').trim())
+    if (!cells.some(Boolean)) continue
+    const hasDate = cells.some((c) => HEADER_PATTERNS.date.some((p) => p.test(c)))
+    const hasAmount = cells.some((c) => HEADER_PATTERNS.amount.some((p) => p.test(c)))
+    if (hasDate && hasAmount) return i
+  }
+  return -1
 }
 
 function findColumn(fields, patterns) {
@@ -123,38 +145,63 @@ export function targetForCategory(category) {
  * Parse a statement into normalised rows. Returns { rows, error, warnings }.
  * Rows carry everything the caller needs to explain itself in the preview.
  */
-export function parseStatement(text) {
-  const parsed = Papa.parse(String(text || '').trim(), { header: true, skipEmptyLines: true })
-  const fields = parsed.meta?.fields || []
-  const cols = detectColumns(fields)
+/**
+ * Parse a statement into normalised rows. Accepts CSV text or the bytes of an
+ * .xlsx workbook — the card's own download, with no conversion step.
+ *
+ * Returns { rows, error, warnings }. Rows carry everything the caller needs to
+ * explain itself in the preview.
+ */
+export function parseStatement(input) {
+  let matrix
+  try {
+    matrix = toMatrix(input)
+  } catch (e) {
+    return { rows: [], error: e.message, warnings: [], columns: {} }
+  }
 
-  if (!cols.date || !cols.amount) {
+  const headerRow = findHeaderRow(matrix)
+  if (headerRow === -1) {
     return {
       rows: [],
       error:
-        'Could not find a date and amount column. Export from Amex as CSV with ' +
-        '"include all additional details" ticked, and keep the header row.',
+        'Could not find a header row with a date and an amount. Export from Amex as ' +
+        'Excel or CSV with "include all additional details" ticked, and keep the ' +
+        'column titles in the file.',
       warnings: [],
-      columns: cols,
+      columns: {},
     }
   }
 
+  const fields = (matrix[headerRow] || []).map((c) => String(c ?? '').trim())
+  const cols = detectColumns(fields)
+  const index = {}
+  for (const [key, name] of Object.entries(cols)) {
+    index[key] = name ? fields.indexOf(name) : -1
+  }
+
   const warnings = []
-  if (!cols.category) {
+  if (headerRow > 0) {
+    warnings.push(`Skipped ${headerRow} row${headerRow === 1 ? '' : 's'} of header information above the column titles.`)
+  }
+  if (index.category === -1) {
     warnings.push(
-      'No category column found, so nothing can be auto-assigned. Re-export with ' +
-        '"include all additional details" ticked.',
+      'No category column found, so everything will be recorded as unassigned. ' +
+        'Re-export with "include all additional details" ticked.',
     )
   }
 
   const rows = []
-  for (const raw of parsed.data) {
-    const [year, month] = parseStatementDate(raw[cols.date])
-    const amount = parseAmount(raw[cols.amount])
+  for (let i = headerRow + 1; i < matrix.length; i++) {
+    const cells = matrix[i] || []
+    const at = (k) => (index[k] >= 0 ? cells[index[k]] : undefined)
+
+    const [year, month] = parseCellDate(at('date'))
+    const amount = parseAmount(at('amount'))
     if (year === null || !Number.isFinite(amount)) continue
 
-    const description = String(raw[cols.description] ?? '').trim()
-    const category = cols.category ? String(raw[cols.category] ?? '').trim() : ''
+    const description = String(at('description') ?? '').trim()
+    const category = String(at('category') ?? '').trim()
 
     rows.push({
       year,
@@ -167,7 +214,32 @@ export function parseStatement(text) {
     })
   }
 
-  return { rows, error: '', warnings, columns: cols }
+  return { rows, error: '', warnings, columns: cols, headerRow }
+}
+
+/** CSV text or workbook bytes, both to the same matrix shape. */
+function toMatrix(input) {
+  if (typeof input === 'string') {
+    const parsed = Papa.parse(input.replace(/^\uFEFF/, '').trim(), {
+      header: false,
+      skipEmptyLines: false,
+    })
+    return parsed.data
+  }
+  if (input instanceof ArrayBuffer || ArrayBuffer.isView(input)) {
+    const buffer = input instanceof ArrayBuffer ? input : input.buffer
+    return readWorkbook(buffer)
+  }
+  throw new Error('Unsupported file. Give it a .csv or .xlsx export.')
+}
+
+/** A cell may hold a date string or an Excel serial number. */
+function parseCellDate(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const iso = serialToISO(value)
+    return iso ? parseStatementDate(iso) : [null, null]
+  }
+  return parseStatementDate(value)
 }
 
 // --- aggregate --------------------------------------------------------------

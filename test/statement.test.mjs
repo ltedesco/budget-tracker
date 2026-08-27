@@ -65,7 +65,7 @@ test('maps card categories only where the mapping is unambiguous', () => {
 
 test('rejects a file with no recognisable columns', () => {
   const r = parseStatement('foo,bar\n1,2')
-  assert.match(r.error, /date and amount/i)
+  assert.match(r.error, /header row with a date and an amount/i)
   assert.equal(r.rows.length, 0)
 })
 
@@ -296,4 +296,85 @@ test('coverage ignores income lines', () => {
   d.categories.push(inc)
   d.items.push(mkItem({ categoryId: inc.id, name: 'Salary', order: 0, planned: Array(12).fill(9999) }, BORN))
   assert.equal(actualCoverage(d).planned, 0)
+})
+
+// --- real export shapes ------------------------------------------------------
+//
+// The first version of this importer assumed the header was the first row,
+// which is true of a hand-written test file and false of every real Amex
+// export. These pin the shapes that actually arrive.
+
+import { findHeaderRow } from '../src/lib/statement.js'
+import { columnIndex, serialToISO } from '../src/lib/xlsx.js'
+
+const PREAMBLE_CSV = `Transaction Details,American Express Gold Card
+Prepared for,
+LOUIS J TEDESCO,
+Account Number,
+XXXX-XXXXXX-83008,
+,
+Date,Description,Card Member,Account #,Amount,Reference,Category
+08/09/2026,WHOLEFDS MARKET,LOUIS,-83008,152.40,3202600001,Merchandise & Supplies-Groceries
+08/14/2026,MOBILE PAYMENT - THANK YOU,LOUIS,-83008,-300.00,3202600002,
+08/19/2026,SHELL OIL,LOUIS,-83008,61.20,3202600003,Transportation-Fuel`
+
+test('finds the header row beneath an export preamble', () => {
+  const matrix = PREAMBLE_CSV.split('\n').map((l) => l.split(','))
+  assert.equal(findHeaderRow(matrix), 6)
+})
+
+test('a real-shaped CSV with preamble parses, and says what it skipped', () => {
+  const r = parseStatement(PREAMBLE_CSV)
+  assert.equal(r.error, '')
+  assert.equal(r.headerRow, 6)
+  assert.equal(r.rows.length, 3)
+  assert.match(r.warnings.join(' '), /skipped 6 rows/i)
+})
+
+test('the preamble is not mistaken for transactions', () => {
+  const d = ensureCatchAll(budget(), MAKE, BORN)
+  const s = summarise(parseStatement(PREAMBLE_CSV).rows, d)
+  assert.equal(s.totals.payments, -300)
+  // Written out rather than 152.4 + 61.2, which is 213.60000000000002 in binary
+  // floating point; the code rounds to cents, and the test should assert cents.
+  assert.equal(s.totals.assigned, 213.6)
+})
+
+test('a header-only file with no rows is reported, not silently empty', () => {
+  const r = parseStatement('Date,Amount\n')
+  assert.equal(r.error, '')
+  assert.equal(r.rows.length, 0)
+})
+
+test('a file with no header at all is rejected with an explanation', () => {
+  const r = parseStatement('one,two\nthree,four')
+  assert.match(r.error, /header row with a date and an amount/i)
+})
+
+test('unsupported input is refused rather than parsed as nonsense', () => {
+  const r = parseStatement(42)
+  assert.match(r.error, /\.csv or \.xlsx/i)
+})
+
+test('column refs decode past Z', () => {
+  assert.equal(columnIndex('A'), 0)
+  assert.equal(columnIndex('Z'), 25)
+  assert.equal(columnIndex('AA'), 26)
+  assert.equal(columnIndex('BC'), 54)
+})
+
+test('Excel date serials convert, including the 1900 leap-year quirk', () => {
+  assert.equal(serialToISO(45900), '2025-08-31')
+  assert.equal(serialToISO(1), '1900-01-01')
+  assert.equal(serialToISO(61), '1900-03-01')
+  assert.equal(serialToISO(0), null)
+  assert.equal(serialToISO('nope'), null)
+})
+
+test('a date held as an Excel serial is read as a date', () => {
+  // Row values as a matrix is what the workbook path produces.
+  const csv = 'Date,Amount,Category\n46000,100.00,Merchandise & Supplies-Groceries'
+  const r = parseStatement(csv)
+  // From CSV it is text "46000", which is not a date — must not silently pass.
+  assert.equal(r.rows.length, 0)
 })

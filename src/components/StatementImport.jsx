@@ -45,22 +45,31 @@ export default function StatementImport({ data, onApply, onPrepare }) {
     <div className="panel">
       <h2>Import card statement</h2>
       <p className="small muted" style={{ marginTop: -6 }}>
-        Reads an Amex CSV export and fills in the <strong>Actual</strong> layer, so you can see
-        where real spending is landing against plan. Export from Amex as <strong>CSV</strong> with{' '}
-        <em>include all additional details</em> ticked — that adds the category column this needs.
+        Reads an Amex export — <strong>.xlsx or .csv</strong>, straight from the download, no
+        converting — and fills in the <strong>Actual</strong> layer, so you can see where real
+        spending is landing against plan. Tick <em>include all additional details</em> when
+        exporting; that adds the category column this needs.
         Payments to the card are excluded; they are transfers, not spending. Anything without a
         confident category still gets recorded, on an <strong>{CATCH_ALL_ITEM}</strong> line — so
         the actual total is never quieter than what you really charged.
       </p>
 
       <div className="row" style={{ gap: 10 }}>
-        <button onClick={() => fileRef.current?.click()}>Choose statement CSV…</button>
+        <button onClick={() => fileRef.current?.click()}>Choose statement file…</button>
         <input
-          ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }}
+          ref={fileRef}
+          type="file"
+          accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          style={{ display: 'none' }}
           onChange={async (e) => {
             const file = e.target.files?.[0]
             e.target.value = ''
-            if (file) load(await file.text(), file.name)
+            if (!file) return
+            // A workbook has to be read as bytes; CSV as text. Going by the
+            // name rather than the MIME type, which browsers report
+            // inconsistently for spreadsheet downloads.
+            const isWorkbook = /\.xlsx$/i.test(file.name)
+            load(isWorkbook ? await file.arrayBuffer() : await file.text(), file.name)
           }}
         />
         {error && <span className="small err">{error}</span>}
