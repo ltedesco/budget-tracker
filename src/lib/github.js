@@ -86,3 +86,63 @@ export async function putFile(config, text, sha, message) {
   const body = await res.json()
   return { sha: body.content?.sha, commit: body.commit?.sha }
 }
+
+/**
+ * Recent commits that touched the data file, newest first. Each entry is a
+ * version of the file that can still be read back — this is what makes the
+ * repo's history usable as a backup rather than something you need git for.
+ *
+ * An empty repo answers 409 and a missing path answers 404; neither is an
+ * error here, they just mean "no history yet".
+ */
+export async function listVersions(config, limit = 15) {
+  const { owner, repo, path, branch, token } = config
+  const url =
+    `${API}/repos/${owner}/${repo}/commits` +
+    `?path=${encodeURIComponent(path)}` +
+    `&sha=${encodeURIComponent(branch || 'main')}` +
+    `&per_page=${Math.max(1, Math.min(100, limit))}`
+  const res = await fetch(url, { headers: headers(token) })
+  if (res.status === 404 || res.status === 409) return []
+  if (!res.ok) await fail(res)
+  const body = await res.json()
+  if (!Array.isArray(body)) return []
+  return body.map((c) => ({
+    sha: c.sha,
+    date: c.commit?.committer?.date || c.commit?.author?.date || '',
+    message: String(c.commit?.message || '').split('\n')[0],
+    author: c.commit?.author?.name || c.author?.login || '',
+  }))
+}
+
+/** Read the data file as it stood at one commit. */
+export async function getFileAt(config, ref) {
+  const { owner, repo, path, token } = config
+  const url = `${API}/repos/${owner}/${repo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(ref)}`
+  const res = await fetch(url, { headers: headers(token) })
+  if (res.status === 404) return { content: null, size: 0 }
+  if (!res.ok) await fail(res)
+  const body = await res.json()
+  if (Array.isArray(body)) throw new Error(`"${path}" is a directory, not a file.`)
+  return { content: decode(body.content || ''), size: body.size || 0 }
+}
+
+/**
+ * The file's size at one commit, without downloading it. Reading each version
+ * to size it would move megabytes to fill in a column, so this asks the tree
+ * instead. Returns null when the size cannot be had — a missing number must
+ * never be the reason the version list fails to appear.
+ */
+export async function fileSizeAt(config, ref) {
+  const { owner, repo, path, token } = config
+  const url = `${API}/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`
+  try {
+    const res = await fetch(url, { headers: headers(token) })
+    if (!res.ok) return null
+    const body = await res.json()
+    const hit = (body.tree || []).find((n) => n.path === path)
+    return typeof hit?.size === 'number' ? hit.size : null
+  } catch {
+    return null
+  }
+}

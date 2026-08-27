@@ -3,6 +3,8 @@ import Modal from './Modal.jsx'
 import StatementImport from './StatementImport.jsx'
 import { copyText, downloadFile, money } from '../lib/format.js'
 import { configErrors } from '../lib/github.js'
+import RestorePanel from './RestorePanel.jsx'
+import { pathForYear } from '../lib/storage.js'
 import { budgetCSV } from '../lib/summary.js'
 import { validateData } from '../lib/model.js'
 
@@ -20,7 +22,9 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
   const [seed, setSeed] = useState('actual')
   const fileRef = useRef(null)
 
-  const missing = configErrors({ ...sync, token })
+  // The file this year actually lives in — history is per-year, like sync.
+  const config = { ...sync, path: pathForYear(sync.path, data.year), token }
+  const missing = configErrors(config)
   const hasSaved = Boolean(sync.tokenEnc)
   const locked = hasSaved && !token
   const unsaved = Boolean(token) && !hasSaved
@@ -313,6 +317,8 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
           shared device.
         </p>
       </div>
+
+      <RestorePanel data={data} config={config} onRestore={actions.restore} />
 
       {preview && (
         <Modal
