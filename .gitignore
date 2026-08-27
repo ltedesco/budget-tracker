@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+
+# The private data file lives in this repo when it is used as the data store,
+# but it must never be committed from the app side — the app writes it through
+# the GitHub Contents API. Committing it here would put real balances into a
+# tree that may be mirrored to a public app repo.
+data/budget-data.json
+data/*-seed.json

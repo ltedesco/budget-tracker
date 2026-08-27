@@ -1,0 +1,67 @@
+# Builds the budget tracker and publishes it to GitHub Pages.
+#
+# GitHub Pages serves from a public repository on free accounts; a private
+# repository needs GitHub Pro or Team. The data file is NOT part of this build —
+# it lives in a private repo and is fetched at runtime through the Contents API.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let a newer push supersede an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # A red build must not reach Pages: the merge logic is what stops two
+      # devices overwriting each other's budget.
+      - name: Run tests
+        run: npm test
+
+      # enablement: true turns Pages on the first time this runs, so the
+      # repo's Pages setting does not have to be flipped by hand.
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Build
+        run: npm run build
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
