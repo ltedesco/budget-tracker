@@ -523,6 +523,21 @@ export default function App() {
     } catch (e) {
       return e.message
     }
+
+    // One secret, entered once. The app lock and the sync token are separate
+    // envelopes, but they are usually protected by the same passphrase, so try
+    // it here rather than making the same thing be typed twice. When they
+    // differ this simply fails and the token stays locked, which is the state
+    // it was in a moment ago — not an error worth reporting.
+    const { tokenEnc } = syncRef.current
+    if (tokenEnc) {
+      try {
+        setTokenState(await decryptToken(tokenEnc, passcode))
+      } catch {
+        /* a different passphrase guards the token; unlock it on Setup & Sync */
+      }
+    }
+
     migrateLegacyYear()
     const found = readKnownYears()
     const target = loadActiveYear(found[0] || new Date().getFullYear())
