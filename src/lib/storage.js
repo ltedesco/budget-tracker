@@ -2,6 +2,7 @@
 // it survive a cleared cache and follow you between devices.
 
 import { emptyData, validateData } from './model.js'
+import * as vault from './vault.js'
 
 // One key per year. Each year is its own document, mirroring the one-file-per-
 // year layout on GitHub: a year stays about 100 KB however many accumulate, and
@@ -16,6 +17,14 @@ const TOKEN_KEY = 'budget:token'
 const PREFS_KEY = 'budget:prefs'
 
 export function loadLocal(year) {
+  // With the lock on, localStorage holds ciphertext. Reading it here would
+  // fail validation and hand back an empty document, which the next save would
+  // then write over the real one — so the cache is the only source while
+  // locked, and a sealed app must never get this far.
+  if (vault.isLockEnabled()) {
+    if (!vault.isUnlocked()) return emptyData(year)
+    return vault.cachedDoc(year) || emptyData(year)
+  }
   try {
     const raw = localStorage.getItem(dataKey(year))
     if (!raw) return emptyData(year)
@@ -36,6 +45,17 @@ export function saveLocal(data) {
     // taken, skip the copy, and then delete the source — losing everything.
     // Emptying a year that already exists is still allowed.
     if (isEmptyDoc(data) && !localStorage.getItem(dataKey(data.year))) return false
+
+    if (vault.isLockEnabled()) {
+      // The hard rail. A sealed app holds no key, so anything it thinks it
+      // has is empty state — writing that would encrypt nothing over
+      // everything. Refuse rather than destroy.
+      if (!vault.isUnlocked()) return false
+      vault.putCached(data.year, data)
+      vault.persist(data.year, data).catch(() => {})
+      return true
+    }
+
     localStorage.setItem(dataKey(data.year), JSON.stringify(data))
     return true
   } catch {
@@ -45,6 +65,7 @@ export function saveLocal(data) {
 
 /** Which years this browser holds, newest first. */
 export function knownYears() {
+  if (vault.isLockEnabled()) return vault.isUnlocked() ? vault.cachedYears() : []
   try {
     const years = []
     for (let i = 0; i < localStorage.length; i++) {

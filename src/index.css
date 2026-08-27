@@ -295,3 +295,6 @@ th.derived { text-align: right; }
   width: auto; padding: 4px 8px; font-size: 14px; font-weight: 600;
   border-radius: 8px; background: var(--panel); border: 1px solid var(--line);
 }
+
+.lock-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.lock-card { width: min(420px, 100%); margin: 0; }

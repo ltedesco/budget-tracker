@@ -6,6 +6,7 @@ import { configErrors } from '../lib/github.js'
 import RestorePanel from './RestorePanel.jsx'
 import { isSingleYearPath, pathForYear } from '../lib/storage.js'
 import { backupFilename, backupMessage, backupText } from '../lib/backup.js'
+import { isLockEnabled } from '../lib/vault.js'
 import { budgetCSV } from '../lib/summary.js'
 import { validateData } from '../lib/model.js'
 
@@ -19,7 +20,18 @@ export default function DataTab({ data, sync, token, syncStatus, actions, backup
   const [setupIn, setSetupIn] = useState('')
   const [balanceDraft, setBalanceDraft] = useState(String(data.startingBalance ?? 0))
   const [seed, setSeed] = useState('actual')
+  const [lockPass, setLockPass] = useState('')
+  const [lockConfirm, setLockConfirm] = useState('')
+  const [lockError, setLockError] = useState('')
+  const [lockBusy, setLockBusy] = useState(false)
   const fileRef = useRef(null)
+
+  const appLocked = isLockEnabled()
+  // A forgotten passcode is not recoverable, by design. Requiring a copy that
+  // is not on this device before turning it on is the difference between a
+  // lock and a way to lose everything.
+  const canEnable =
+    backup.status !== 'never' && lockPass.length >= 8 && lockPass === lockConfirm
 
   // The file this year actually lives in — history is per-year, like sync.
   const config = { ...sync, path: pathForYear(sync.path, data.year), token }
@@ -171,6 +183,93 @@ export default function DataTab({ data, sync, token, syncStatus, actions, backup
       </div>
 
       <StatementImport data={data} onApply={actions.applyStatement} onPrepare={actions.prepareForStatement} />
+
+      <div className="panel">
+        <h2>App lock</h2>
+        <p className="small muted" style={{ marginTop: -6 }}>
+          {appLocked
+            ? 'On. This device asks for the passcode before showing anything, and every year is stored encrypted.'
+            : 'Off. Anyone who opens this app on this device sees your figures straight away.'}
+          {' '}The lock <strong>is</strong> the encryption, not a screen over it: with it on, the
+          browser's storage holds ciphertext, so there is genuinely nothing to show until the
+          passcode decrypts it.
+        </p>
+
+        {appLocked ? (
+          <>
+            <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+              <button onClick={actions.lockNow}>Lock now</button>
+              <button
+                className="danger"
+                disabled={lockBusy}
+                onClick={async () => {
+                  setLockBusy(true)
+                  setLockError(await actions.disableLock())
+                  setLockBusy(false)
+                }}
+              >
+                Turn the lock off
+              </button>
+              {lockError && <span className="small err">{lockError}</span>}
+            </div>
+            <p className="tiny muted" style={{ marginBottom: 0, marginTop: 10 }}>
+              Turning it off writes every year back unencrypted. Locking now clears the passcode
+              and the sync token from this tab; both come back with the passcode.
+            </p>
+          </>
+        ) : (
+          <>
+            {backup.status === 'never' && (
+              <p className="note err">
+                <strong>Save a backup first.</strong> A forgotten passcode cannot be reset or
+                recovered — that is what makes it worth having — so there must be a copy of{' '}
+                {data.year} somewhere else before this goes on. Use{' '}
+                <strong>Full backup (JSON)</strong> above.
+              </p>
+            )}
+            <form
+              className="row"
+              style={{ alignItems: 'flex-end' }}
+              onSubmit={async (e) => {
+                e.preventDefault()
+                setLockBusy(true)
+                const message = await actions.enableLock(lockPass)
+                setLockBusy(false)
+                setLockError(message)
+                if (!message) { setLockPass(''); setLockConfirm('') }
+              }}
+            >
+              <label className="field grow">
+                <span>Passcode (8 characters or more)</span>
+                <input type="password" value={lockPass} autoComplete="new-password"
+                  onChange={(e) => setLockPass(e.target.value)} />
+              </label>
+              <label className="field grow">
+                <span>Type it again</span>
+                <input type="password" value={lockConfirm} autoComplete="new-password"
+                  onChange={(e) => setLockConfirm(e.target.value)} />
+              </label>
+              <button className="primary" type="submit" disabled={!canEnable || lockBusy}>
+                {lockBusy ? 'Encrypting…' : 'Turn the lock on'}
+              </button>
+            </form>
+            <p className="small" style={{ marginBottom: 0 }}>
+              {lockError && <span className="err">{lockError}</span>}
+              {!lockError && lockPass && lockPass.length < 8 && (
+                <span className="muted">A little longer — 8 characters at least.</span>
+              )}
+              {!lockError && lockPass.length >= 8 && lockConfirm && lockPass !== lockConfirm && (
+                <span className="muted">The two do not match yet.</span>
+              )}
+            </p>
+            <p className="tiny muted" style={{ marginBottom: 0, marginTop: 6 }}>
+              This can be the same passphrase you use for the sync token, and one secret is easier
+              to remember than two. It is never stored — only a value encrypted with it, which is
+              what unlocking checks against.
+            </p>
+          </>
+        )}
+      </div>
 
       <div className="panel">
         <h2>GitHub sync</h2>

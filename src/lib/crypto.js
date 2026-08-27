@@ -47,6 +47,48 @@ async function deriveKey(passphrase, salt) {
   )
 }
 
+// --- reusable primitives ------------------------------------------------
+//
+// The app lock encrypts whole budget documents, which is the same operation
+// on a much larger payload and many more times. Deriving a key costs 310,000
+// PBKDF2 rounds, so it is done ONCE at unlock and the CryptoKey is held in
+// memory; every save reuses it. Re-deriving per save would make typing in the
+// grid unusable.
+
+export const randomSaltB64 = () => bytesToB64(globalThis.crypto.getRandomValues(new Uint8Array(SALT_BYTES)))
+
+/** Derive the AES key for a passphrase and a stored salt. */
+export const keyFor = (passphrase, saltB64) => deriveKey(passphrase, b64ToBytes(saltB64))
+
+/** Encrypt text under an already-derived key. */
+export async function encryptWith(key, text) {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_BYTES))
+  const ct = await subtle().encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    new TextEncoder().encode(text),
+  )
+  return { v: 1, iv: bytesToB64(iv), ct: bytesToB64(ct) }
+}
+
+/**
+ * Decrypt an envelope. AES-GCM is authenticated, so a wrong key throws rather
+ * than returning plausible rubbish — which is what makes "did it decrypt?" a
+ * sound passphrase check on its own.
+ */
+export async function decryptWith(key, envelope) {
+  if (!envelope?.ct || !envelope?.iv) throw new Error('Nothing to decrypt.')
+  const plain = await subtle().decrypt(
+    { name: 'AES-GCM', iv: b64ToBytes(envelope.iv) },
+    key,
+    b64ToBytes(envelope.ct),
+  )
+  return new TextDecoder().decode(plain)
+}
+
+/** Whether a stored value is one of our envelopes rather than a plain document. */
+export const isEnvelope = (v) => Boolean(v && typeof v === 'object' && v.ct && v.iv)
+
 /** Encrypt a token. Returns a JSON-serialisable envelope safe to store. */
 export async function encryptToken(token, passphrase) {
   if (!token) throw new Error('No token to encrypt.')

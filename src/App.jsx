@@ -5,6 +5,7 @@ import BudgetGrid from './components/BudgetGrid.jsx'
 import DataTab from './components/DataTab.jsx'
 import Toast from './components/Toast.jsx'
 import Modal from './components/Modal.jsx'
+import LockScreen from './components/LockScreen.jsx'
 import { configErrors } from './lib/github.js'
 import {
   copyLayer, fillRow, makeCategory, makeItem, nowISO, setCell, setItemField, toCell,
@@ -18,6 +19,7 @@ import { ensureCatchAll } from './lib/statement.js'
 import { addTransaction, removeTransaction } from './lib/ledger.js'
 import { pullMerged, pushMerged } from './lib/sync.js'
 import { backupState, recordBackup } from './lib/backup.js'
+import * as vault from './lib/vault.js'
 import { decryptToken, encryptToken, makeSetupCode, readSetupCode } from './lib/crypto.js'
 import {
   loadLocal, loadPrefs, loadSessionToken, loadSyncConfig, loadActiveYear,
@@ -54,7 +56,12 @@ export default function App() {
   // A document per year, on its own storage key and its own file. Migrate any
   // pre-multi-year document first, or the first load after upgrading would look
   // like every figure had vanished.
+  // Decided before anything is read: while sealed there is no key, so every
+  // document on disk is ciphertext and loading one would yield an empty
+  // budget that a later save could write over the real thing.
+  const [sealed, setSealed] = useState(vault.isSealed)
   const [year, setYear] = useState(() => {
+    if (vault.isSealed()) return loadActiveYear(new Date().getFullYear())
     const migrated = migrateLegacyYear()
     return loadActiveYear(migrated || new Date().getFullYear())
   })
@@ -87,9 +94,10 @@ export default function App() {
 
   useEffect(() => {
     dataRef.current = data
+    if (sealed) return
     saveLocal(data)
     setYears((prev) => (prev.includes(data.year) ? prev : [...prev, data.year].sort((a, b) => b - a)))
-  }, [data])
+  }, [data, sealed])
   useEffect(() => { saveActiveYear(year) }, [year])
   useEffect(() => { saveSyncConfig(sync) }, [sync])
   useEffect(() => { savePrefs(prefs) }, [prefs])
@@ -401,6 +409,39 @@ export default function App() {
       setSync: setSyncField,
 
       /**
+       * Turn the app lock on. Everything on this device is encrypted under the
+       * passcode; losing it loses this copy, which is why the caller makes
+       * sure a backup exists first.
+       */
+      enableLock: async (passcode) => {
+        try {
+          const found = await vault.enableLock(passcode)
+          setYears(found)
+          showToast('App lock on. This device now asks for the passcode.')
+          return ''
+        } catch (e) {
+          return e.message
+        }
+      },
+
+      disableLock: async () => {
+        try {
+          await vault.disableLock()
+          setYears(readKnownYears())
+          showToast('App lock off. Figures are stored unencrypted again.')
+          return ''
+        } catch (e) {
+          return e.message
+        }
+      },
+
+      lockNow: () => {
+        vault.lock()
+        setTokenState('')
+        setSealed(true)
+      },
+
+      /**
        * Move sync onto one file per year. Safe to run at any time: the years
        * simply start writing to new paths, and whatever the old single file
        * holds stays where it is as one more copy.
@@ -471,6 +512,29 @@ export default function App() {
     }))
   }, [])
 
+  /**
+   * Open the vault, then adopt what came out. The legacy migration runs here
+   * rather than at startup: while sealed there was no key to read anything
+   * with, so it could not have run before now.
+   */
+  const unlockApp = useCallback(async (passcode) => {
+    try {
+      await vault.unlock(passcode)
+    } catch (e) {
+      return e.message
+    }
+    migrateLegacyYear()
+    const found = readKnownYears()
+    const target = loadActiveYear(found[0] || new Date().getFullYear())
+    const doc = loadLocal(target)
+    dataRef.current = doc
+    setYears(found)
+    setYear(target)
+    setData(doc)
+    setSealed(false)
+    return ''
+  }, [])
+
   const setLayer = useCallback((next) => setPrefs((p) => ({ ...p, layer: next })), [])
   const setInspect = useCallback((on) => setPrefs((p) => ({ ...p, inspect: on })), [])
 
@@ -481,6 +545,8 @@ export default function App() {
       : syncStatus.busy
         ? 'Syncing…'
         : sync.autoPush ? 'Sync on (auto)' : 'Sync on'
+
+  if (sealed) return <LockScreen appName={APP_NAME} onUnlock={unlockApp} />
 
   return (
     <div className={`wrap${tab === 'data' ? '' : ' wide'}`}>
