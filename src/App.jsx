@@ -402,7 +402,7 @@ export default function App() {
         : sync.autoPush ? 'Sync on (auto)' : 'Sync on'
 
   return (
-    <div className="wrap">
+    <div className={`wrap${tab === 'data' ? '' : ' wide'}`}>
       <header className="app-head">
         <h1>Budget {data.year}</h1>
         <span className="sync-state">{syncStatus.error ? <span className="err">{syncStatus.error}</span> : syncLabel}</span>

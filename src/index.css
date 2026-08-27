@@ -73,6 +73,12 @@ body {
 
 .wrap { max-width: 1040px; margin: 0 auto; padding: 20px 16px 80px; }
 
+/* The twelve-month grid needs about 1220px before it starts hiding December,
+   the totals and the row controls behind a scroll. The tabs that show it get a
+   wider container; the settings tab keeps the narrower one, because its
+   paragraphs would otherwise run to a line length that is unpleasant to read. */
+.wrap.wide { max-width: 1320px; }
+
 header.app-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 16px; }
 header.app-head h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
 header.app-head .sync-state { margin-left: auto; font-size: 13px; color: var(--muted); }
@@ -188,7 +194,7 @@ td.row-select select { padding: 4px 6px; font-size: 13px; }
 .grid-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 table.grid { min-width: 900px; font-size: 13px; }
-table.grid th, table.grid td { padding: 5px 8px; white-space: nowrap; }
+table.grid th, table.grid td { padding: 5px 7px; white-space: nowrap; }
 table.grid th.month, table.grid td.month { text-align: right; font-variant-numeric: tabular-nums; width: 72px; }
 
 /* Sticky name column. Needs its own background or scrolled cells show through. */
