@@ -457,3 +457,67 @@ test('a bare target name that matches several categories is refused, not guessed
   assert.ok(resolveTarget(d, 'Everyday::Groceries').item)
   assert.ok(resolveTarget(d, 'Pets::Groceries').item)
 })
+
+// --- the card category wins when it is confident -----------------------------
+//
+// Three bugs found against a full year of real statements, all the same shape:
+// a merchant pattern is a substring test over free text, so it misfires
+// invisibly. Deferring to a confident card category fixes the class, not just
+// the instances.
+
+test('a substring inside a longer merchant name does not trigger a rule', () => {
+  // "BRAVISSIMO" contains "avis". The card says lodging; that is right.
+  assert.equal(
+    matchRule(row({ description: 'AplPay BRAVISSIMO GIGIRONA', category: 'Travel-Lodging' })),
+    'Travel::Hotels',
+  )
+})
+
+test('the restaurant inside a cinema is a restaurant', () => {
+  // Amex classified it as Bar & Café, which is correct; the Cinemark merchant
+  // rule must not drag it onto the Movies line.
+  assert.equal(
+    matchRule(row({ description: 'CINEMARK 345 RSTBAR MYRTLE BEACH', category: 'Restaurant-Bar & Café' })),
+    'Everyday::Restaurants',
+  )
+  // The cinema itself, which the card files vaguely, still maps.
+  assert.equal(
+    matchRule(row({ description: 'AplPay CINEMARK 345 MYRTLE BEACH', category: 'Entertainment-Theatrical Events' })),
+    'Entertainment::Concerts/shows',
+  )
+})
+
+test('an override rule still beats the card category', () => {
+  // Streaming is filed by the card under "Cable & Internet Comm" and belongs
+  // on a subscription line. This is the one case where merchant must win.
+  assert.equal(
+    matchRule(row({ description: 'NETFLIX.COM 866-579-7172', category: 'Communications-Cable & Internet Comm', state: 'NY' })),
+    'Technology::Netflix/Paramount/Discovery',
+  )
+})
+
+test('merchant rules still carry categories the card labels uselessly', () => {
+  // These arrive as vague "Other" and "Professional Services" labels, so there
+  // is no category rule to defer to and the merchant is the only signal.
+  assert.equal(matchRule(row({ description: 'ALL ISLAND FUEL OF MSHIRLEY NY', category: 'Other-Utilities' })), 'Utilities::Heating Oil')
+  assert.equal(matchRule(row({ description: 'AplPay IN *JAKS LAWNMYRTLE BEA', category: 'Business Services-Professional Services' })), 'Home::Lawn Maintenance')
+  assert.equal(matchRule(row({ description: 'SANTEE COOPER 888-798-3785 SC', category: 'Other-Utilities' })), 'Utilities::2nd home utilities')
+  assert.equal(matchRule(row({ description: 'SCWA-AUTOPAYPAYMENT 631-698-95', category: 'Other-Utilities' })), 'Utilities::Water (Sayville)')
+  assert.equal(matchRule(row({ description: 'FEMA FLOOD INSURANCESAINT PETE', category: 'Other-Government Services' })), 'Insurance::Surfside Home flood  Insurance')
+})
+
+test('travel bookings map to lodging', () => {
+  for (const m of ['HOTEL ON BOOKING.COMAMSTERDAM', 'AplPay AIRBNB * HM3JSAN FRANCI', 'AplPay EXPEDIA 72076EXPEDIA.CO']) {
+    assert.equal(matchRule(row({ description: m, category: 'Travel-Travel Agencies' })), 'Travel::Hotels')
+  }
+})
+
+test('every rule names a target shaped Category::Item', () => {
+  // A target that does not resolve is a silent no-op — an "Entertainment::Other"
+  // rule was written against a line item that does not exist.
+  for (const rule of RULES) {
+    for (const spec of rule.byState ? Object.values(rule.byState) : [rule.target]) {
+      assert.ok(typeof spec === 'string' && spec.includes('::'), `unqualified target: ${spec}`)
+    }
+  }
+})

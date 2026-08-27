@@ -153,7 +153,7 @@ export const RULES = [
   // Amex files streaming under "Cable & Internet", but the budget treats it as
   // a subscription, not a utility.
   { merchant: /netflix|discovery\s*digital|paramount|hulu|disney\s*plus|max\.com/i,
-    target: 'Technology::Netflix/Paramount/Discovery' },
+    target: 'Technology::Netflix/Paramount/Discovery', override: true },
   { merchant: /openai|anthropic|chatgpt|claude\.ai|cursor|perplexity/i,
     target: 'Technology::Claude/GPT' },
   // "Lowe's" needs the exclusion: Lowe's Foods is a Carolinas grocery chain,
@@ -172,6 +172,33 @@ export const RULES = [
   { merchant: /northwell|quest\s*diagnost|labcorp|cvs\s*minute/i,
     target: 'Health/medical::Doctors/dental/vision' },
   { merchant: /planet\s*fitness|lifetime\s*fitness|\bgym\b|orangetheory/i, target: 'Other::GYM' },
+
+  // -- merchant rules from a full year's statements -------------------------
+  // Written against real descriptions rather than category names. Amex's
+  // category is often wrong about purpose: a lawn service files under
+  // "Professional Services", heating oil under "Other-Utilities", and a bird
+  // feeder under "Employment Agencies".
+  { merchant: /booking\.com|bookingcom|airbnb|expedia|vrbo|hotels\.com/i, target: 'Travel::Hotels' },
+  { merchant: /all\s*island\s*fuel/i, target: 'Utilities::Heating Oil' },
+  { merchant: /santee\s*cooper/i, target: 'Utilities::2nd home utilities' },
+  { merchant: /\bscwa\b|suffolk\s*county\s*water/i, target: 'Utilities::Water (Sayville)' },
+  { merchant: /micro\s*center/i, target: 'Technology::Hardware' },
+  { merchant: /netlify|google\s*\*?\s*google\s*nest|apple\.com\/bil/i, target: 'Technology::Software' },
+  { merchant: /top\s*golf|topgolf/i, target: 'Entertainment::Sports' },
+  { merchant: /dave\s*&\s*buster|game\s*on\s*arcade/i, target: 'Entertainment::Games' },
+  { merchant: /salon\s*d.artiste/i, target: 'Everyday::Hair/beauty' },
+  { merchant: /mini\s*monet/i, target: 'Children::Activities' },
+  { merchant: /moves\s*app|amazon\s*prime/i, target: 'Everyday::Subscriptions' },
+  { merchant: /jaks\s*lawn/i, target: 'Home::Lawn Maintenance' },
+  { merchant: /enterprise\s*rent|enterprise\s*ren\d|hertz|\bavis\b|budget\s*rent/i, target: 'Travel::Transportation' },
+  { merchant: /fema\s*flood/i, target: 'Insurance::Surfside Home flood  Insurance' },
+  { merchant: /state\s*dmv|\bdmv\b/i, target: 'Transportation::Registration/license' },
+  { merchant: /legoland|adventureland/i, target: 'Children::Activities' },
+  { merchant: /autozone|advance\s*auto|pep\s*boys/i, target: 'Transportation::Repairs' },
+  { merchant: /scholastic|connetquot\s*csd|\bcsd\b/i, target: 'Children::School' },
+  { merchant: /michaels/i, target: 'Entertainment::Hobbies' },
+  { merchant: /car\s*rental\s*protection/i, target: 'Travel::Transportation' },
+  { merchant: /eractoll|carte\s*(italiane|straniere)/i, target: 'Travel::Transportation' },
 
   // -- location, where the budget keeps a line per property -----------------
   { category: /cable\s*&\s*internet|internet\s*comm/i,
@@ -195,6 +222,16 @@ export const RULES = [
   { category: /theatrical|general\s*events|concert/i, target: 'Entertainment::Concerts/shows' },
   { category: /health\s*care/i, target: 'Health/medical::Doctors/dental/vision' },
   { category: /fees\s*&\s*adjustments/i, target: 'Debt::Credit cards' },
+  { category: /travel\s*agenc/i, target: 'Travel::Hotels' },
+  { category: /vehicle\s*rental/i, target: 'Travel::Transportation' },
+  { category: /computer\s*supplies|electronics\s*stores?/i, target: 'Technology::Hardware' },
+  { category: /sporting\s*goods/i, target: 'Entertainment::Sports' },
+  { category: /theme\s*parks/i, target: 'Children::Activities' },
+  { category: /general\s*attractions/i, target: 'Travel::Entertainment' },
+  { category: /auto\s*services/i, target: 'Transportation::Repairs' },
+  { category: /tolls\s*&\s*fees/i, target: 'Transportation::Other' },
+  { category: /book\s*stores?|arts\s*&\s*jewelry/i, target: 'Entertainment::Hobbies' },
+  { category: /other-education|^education/i, target: 'Children::School' },
   // Deliberately absent: "Internet Purchase". That is Amazon, Walmart.com and
   // Target.com, which between them can be anything at all. The purpose is not
   // in the file, so it goes to the catch-all rather than being invented.
@@ -206,22 +243,53 @@ export function stateOf(location) {
   return m ? m[1] : ''
 }
 
-/** The target spec a transaction maps to, or null when nothing matches. */
+/**
+ * The target spec a transaction maps to, or null when nothing matches.
+ *
+ * Merchant and category rules are both collected, and the card's own category
+ * wins when it has one. That is the opposite of the obvious design, and it is
+ * what the data demands: a merchant pattern is a substring test against free
+ * text, so it misfires in ways that are invisible until money moves. "Lowe's"
+ * matched Lowe's Foods, a grocery chain. "Avis" matched BRAVISSIMO. A rule for
+ * Cinemark caught the restaurant inside the cinema, which the card had already
+ * filed — correctly — as a restaurant.
+ *
+ * In each case the card category was right and the merchant rule was wrong, so
+ * deferring to a confident category is the safer default. A rule that genuinely
+ * needs to overrule the card sets `override`: streaming services are filed by
+ * Amex under "Cable & Internet Comm", and belong on a subscription line.
+ *
+ * Merchant rules still do the heavy lifting, because most of what needs one
+ * has no useful category at all — heating oil and a lawn service both arrive
+ * as vague "Other" and "Professional Services" labels.
+ */
 export function matchRule(row) {
+  let merchantHit = null
+  let categoryHit = null
+
   for (const rule of RULES) {
-    if (rule.merchant && !rule.merchant.test(row.description || '')) continue
+    const byMerchant = Boolean(rule.merchant)
+    if (byMerchant && !rule.merchant.test(row.description || '')) continue
     if (rule.category && !rule.category.test(row.category || '')) continue
-    if (!rule.merchant && !rule.category) continue
+    if (!byMerchant && !rule.category) continue
+
+    let target = rule.target
     if (rule.byState) {
-      const target = rule.byState[row.state]
-      // An unrecognised state means the rule cannot decide; fall through to a
-      // later rule rather than picking one property arbitrarily.
+      target = rule.byState[row.state]
+      // An unrecognised state means the rule cannot decide; fall through rather
+      // than picking one property arbitrarily.
       if (!target) continue
-      return target
     }
-    return rule.target
+
+    if (byMerchant) {
+      if (rule.override) return target
+      if (!merchantHit) merchantHit = target
+    } else if (!categoryHit) {
+      categoryHit = target
+    }
   }
-  return null
+
+  return categoryHit || merchantHit || null
 }
 
 /** Kept for callers that only have a category to go on. */
