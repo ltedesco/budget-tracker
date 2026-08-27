@@ -193,6 +193,33 @@ export const OTHER_ID = '__other__'
  * into a single "Other" rather than cycled — an eighth and a sixteenth series
  * sharing a colour is worse than not splitting them out.
  */
+/**
+ * How many hues are held back at the top of the palette for income.
+ *
+ * Income is anchored: the last slot is the teal the app uses for income
+ * everywhere else, and the reader has learnt it. Letting expenses take slots
+ * from the top and bump income down the palette is how a salary ended up
+ * mustard while an expense band wore the income colour. Reserving instead of
+ * resolving means the two sides can never contend for a hue at all.
+ *
+ * Capped at three so a budget with many ways in still leaves five for the ways
+ * out, which is where the detail usually is.
+ */
+const incomeReserve = (data) =>
+  Math.min(3, Math.max(1, categoriesOf(data, 'income').length))
+
+/**
+ * The palette slot a category always occupies: its own position within its
+ * kind, inside that kind's range. It depends on the document, never on what is
+ * currently selected — which is what stops unticking one band repainting the
+ * others.
+ */
+function slotFor(data, kind, index) {
+  const reserved = incomeReserve(data)
+  if (kind === 'income') return MAX_SERIES - 1 - (index % reserved)
+  return index % (MAX_SERIES - reserved)
+}
+
 export function seriesFor(data, kind, layer, only = null, budget = MAX_SERIES) {
   // The slot is taken before filtering, from the category's position among all
   // of its kind. Taking it afterwards would number the survivors 0,1,2… and
@@ -202,7 +229,7 @@ export function seriesFor(data, kind, layer, only = null, budget = MAX_SERIES) {
       id: c.id,
       name: c.name,
       kind,
-      slot: kind === 'income' ? MAX_SERIES - 1 - (i % MAX_SERIES) : i % MAX_SERIES,
+      slot: slotFor(data, kind, i),
       total: sumMonths(categoryMonths(data, c.id, layer)),
     }))
     .filter((c) => !only || only.has(c.id))
@@ -228,14 +255,13 @@ export function seriesFor(data, kind, layer, only = null, budget = MAX_SERIES) {
 }
 
 /**
- * Give every visible band a colour nobody else is using.
+ * The last line of defence against two visible bands wearing one colour.
  *
- * Preferred slots wrap at eight, so two visible categories sixteen apart — or
- * an income and an expense meeting in the middle — can ask for the same hue.
- * Two bands the same colour on one chart is a worse failure than a band moving
- * colour, so a clash is resolved by moving the later one to the next free slot.
- * Everything that does not clash keeps the slot it asked for, which is the
- * common case and the one that has to stay stable.
+ * With income and expenses drawing from reserved, non-overlapping ranges this
+ * should never fire. It stays because two identical bands is the failure a
+ * reader cannot recover from, and a category wrapping past its range — many
+ * more categories than the palette is wide — is the one case that could still
+ * produce one. Income is placed first so it keeps its anchored hue.
  */
 export function assignSlots(income, expense) {
   const taken = new Set()
@@ -248,10 +274,8 @@ export function assignSlots(income, expense) {
     taken.add(slot)
     return { ...s, slot }
   }
-  // Expenses first: they are the many, and the ones a reader tracks between
-  // views. Income yields the slot when the two want the same hue.
-  const nextExpense = expense.map(place)
   const nextIncome = income.map(place)
+  const nextExpense = expense.map(place)
   return { income: nextIncome, expense: nextExpense }
 }
 
@@ -260,10 +284,9 @@ export function assignSlots(income, expense) {
  *
  * The eight hues are shared between the two stacks, not eight each: two bands
  * the same colour are just as confusing standing in different stacks as in the
- * same one. So the budget is split before either is folded. Income takes only
- * what it needs, up to half, and expenses take the rest — a budget usually has
- * two or three ways in and a dozen ways out, and it is the ways out that
- * deserve the bands.
+ * same one. So the budget is split before either is folded, along the same
+ * reservation the colour slots use — a budget usually has two or three ways in
+ * and a dozen ways out, and it is the ways out that deserve the bands.
  */
 export function breakdown(data, layer, only = null) {
   const incomeCount = categoriesOf(data, 'income').filter((c) => !only || only.has(c.id)).length
@@ -272,7 +295,8 @@ export function breakdown(data, layer, only = null) {
   let incomeBudget = incomeCount
   let expenseBudget = expenseCount
   if (incomeCount + expenseCount > MAX_SERIES) {
-    incomeBudget = Math.min(incomeCount, Math.max(1, Math.floor(MAX_SERIES / 2)))
+    const reserved = incomeReserve(data)
+    incomeBudget = Math.min(incomeCount, reserved)
     expenseBudget = MAX_SERIES - incomeBudget
   }
 

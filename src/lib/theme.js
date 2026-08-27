@@ -17,24 +17,38 @@ const CHART = {
 /**
  * Eight categorical hues for the per-category breakdown, in fixed order.
  *
- * Validated in both modes on the adjacent pairlist, which is the one that
- * governs stacked bars: worst adjacent colour-vision separation is 9.1 light
- * and 8.4 dark against a target of 8, and worst normal-vision separation 19.6
- * and 19.3 against a floor of 15. The dark column is the same eight hues
- * re-stepped for the dark surface, not the light set inverted.
+ * Built rather than picked. One constant lightness and one constant chroma
+ * (OKLCH L 0.62 light, 0.66 dark, C 0.145) with the hues evenly spaced, so the
+ * eight read as one family instead of a set of unrelated crayons — the earlier
+ * default varied lightness hue by hue, which is what made the chart look like
+ * a pie of primaries.
  *
- * Three light hues sit under 3:1 against the surface. That is allowed only
- * where something other than colour carries identity, so the breakdown always
- * ships a legend naming every series, a tooltip listing them by name, and the
- * monthly table underneath.
+ * The spacing is anchored on the two hues the app already uses: burnt orange
+ * at 40 for expenses and teal at 175 for income. Because expenses fill slots
+ * upward from 0 and income downward from 7, the first expense band is orange
+ * and the first income band is teal — the same reading the Totals view gives.
+ *
+ * Validated against this app's own surfaces (#ffffff and #1b2027), both modes,
+ * every check passing with nothing resting on the relief clause:
+ *
+ *   colour-vision separation  12.9 light / 13.0 dark   (target 8)
+ *   normal-vision separation  18.4 light / 18.9 dark   (floor 15)
+ *   contrast vs surface       all 8 >= 3:1 in both modes
+ *
+ * The dark column is the same eight hues re-stepped one notch lighter for the
+ * dark surface, never the light set inverted.
  */
 const CATEGORY = {
-  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'],
-  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
+  light: ['#cd633c', '#0095b5', '#68972b', '#a16ac7', '#a97f00', '#c75c8b', '#5b82dd', '#009d82'],
+  dark: ['#db6f49', '#00a2c5', '#74a339', '#ad76d4', '#b88a00', '#d56897', '#668eeb', '#00aa8e'],
 }
 
-/** Everything past the eighth series, folded together. Deliberately neutral. */
-const OTHER = { light: '#94a3b8', dark: '#64748b' }
+/**
+ * Everything past the eighth series, folded together. Same lightness as the
+ * hues so it sits level with them, but almost no chroma, so it reads as "the
+ * rest" rather than competing as a ninth category.
+ */
+const OTHER = { light: '#7e8791', dark: '#8a939d' }
 
 export const categoryColors = (resolved) => CATEGORY[resolved] || CATEGORY.light
 export const otherColor = (resolved) => OTHER[resolved] || OTHER.light

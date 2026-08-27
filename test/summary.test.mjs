@@ -312,3 +312,23 @@ test('filtering still does not repaint the bands that survive', () => {
     assert.equal(s.slot, was.slot, `${s.name} changed colour when the filter changed`)
   }
 })
+
+test('income keeps the anchored end of the palette, whatever expenses ask for', () => {
+  // The bug this replaced: expenses were placed first, took the income hue,
+  // and a salary came out mustard while an expense band wore the teal.
+  const d = wide(12)
+  const { income, expense } = breakdown(d, 'planned')
+  assert.equal(income[0].slot, MAX_SERIES - 1, 'the first income band holds the last slot')
+  assert.ok(expense.every((s) => s.slot < 0 || s.slot < MAX_SERIES - 1),
+    'no expense band may sit in the reserved income range')
+})
+
+test('income and expense ranges never overlap, however many categories', () => {
+  for (const n of [1, 5, 8, 12, 20]) {
+    const d = wide(n)
+    const { income, expense } = breakdown(d, 'planned')
+    const inSlots = new Set(income.map((s) => s.slot).filter((x) => x >= 0))
+    const exSlots = expense.map((s) => s.slot).filter((x) => x >= 0)
+    assert.ok(exSlots.every((s) => !inSlots.has(s)), `overlap with ${n} expense categories`)
+  }
+})
