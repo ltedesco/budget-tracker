@@ -79,6 +79,11 @@ export function makeItem({ categoryId, name, order, planned, actual }, at = nowI
     order,
     planned: normalizeMonths(planned),
     actual: normalizeMonths(actual),
+    // What each import source contributed to each month, as
+    // { "<monthIndex>": { "<source>": amount } }. `actual` stays the single
+    // authoritative figure — this only records how it was arrived at, so one
+    // card's re-import can replace its own share without touching another's.
+    imported: {},
     fieldsAt: {},
     // Baseline stamp for every field never edited individually. Distinct from
     // updatedAt on purpose — see `stamp()` in the merge section.
@@ -115,12 +120,20 @@ export function setItemField(item, key, value, at = nowISO()) {
 export function setCell(item, layer, index, value, at = nowISO()) {
   const months = [...normalizeMonths(item[layer])]
   months[index] = toCell(value)
-  return {
+  const next = {
     ...item,
     [layer]: months,
     fieldsAt: { ...item.fieldsAt, [`${layer}.${index}`]: at },
     updatedAt: at,
   }
+  // A hand-typed figure replaces whatever the importers had contributed to
+  // that cell, rather than being added to it. The next import for a source
+  // re-establishes that source's share.
+  if (layer === 'actual' && next.imported?.[index] !== undefined) {
+    const { [String(index)]: _dropped, ...rest } = next.imported
+    next.imported = rest
+  }
+  return next
 }
 
 /** Write the same value across all 12 months of a layer — the common case. */
@@ -173,6 +186,7 @@ export function validateData(raw) {
     order: Number.isFinite(Number(it?.order)) ? Number(it.order) : i,
     planned: normalizeMonths(it?.planned),
     actual: normalizeMonths(it?.actual),
+    imported: sanitizeImported(it?.imported),
     fieldsAt: sanitizeFieldsAt(it?.fieldsAt),
     baseAt: String(it?.baseAt ?? it?.updatedAt ?? ''),
     updatedAt: String(it?.updatedAt ?? ''),
@@ -213,6 +227,24 @@ export function validateData(raw) {
       deleted,
     },
   }
+}
+
+/** Month -> source -> amount, with anything malformed dropped. */
+function sanitizeImported(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out = {}
+  for (const [month, sources] of Object.entries(raw)) {
+    const idx = Number(month)
+    if (!Number.isInteger(idx) || idx < 0 || idx > 11) continue
+    if (!sources || typeof sources !== 'object' || Array.isArray(sources)) continue
+    const clean = {}
+    for (const [source, amount] of Object.entries(sources)) {
+      const n = Number(amount)
+      if (source && Number.isFinite(n)) clean[String(source)] = Math.round(n * 100) / 100
+    }
+    if (Object.keys(clean).length) out[String(idx)] = clean
+  }
+  return out
 }
 
 /** Keep only string-valued keys; a malformed map must not poison the merge. */
@@ -275,12 +307,20 @@ export function mergeItem(a, b) {
     if (at) out.fieldsAt[key] = at
   }
 
+  out.imported = {}
   for (const layer of LAYERS) {
     for (let i = 0; i < 12; i++) {
       const key = `${layer}.${i}`
       out[layer][i] = pickField(a, b, key, (r) => normalizeMonths(r[layer])[i])
       const at = maxStamp(a, b, key)
       if (at) out.fieldsAt[key] = at
+      // The per-source breakdown belongs to the side that won the figure;
+      // taking it from the other one would leave a cell whose parts do not
+      // add up to its total.
+      if (layer === 'actual') {
+        const winner = pickField(a, b, key, (r) => r.imported?.[i])
+        if (winner && Object.keys(winner).length) out.imported[String(i)] = { ...winner }
+      }
     }
   }
 

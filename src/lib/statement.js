@@ -22,7 +22,9 @@ import { readWorkbook, serialToISO } from './xlsx.js'
 const HEADER_PATTERNS = {
   date: [/^date$/i, /transaction date/i, /^posted date/i],
   description: [/^description$/i, /^merchant/i, /appears on your statement as/i, /extended details/i],
-  amount: [/^amount$/i, /^debit/i],
+  amount: [/^amount$/i, /^debit$/i, /^debit amount/i],
+  credit: [/^credit$/i, /^credit amount/i],
+  account: [/^account\s*#/i, /^card\s*no/i, /^account\s*number/i, /^card\s*member/i],
   category: [/^category$/i, /^type$/i],
   reference: [/^reference$/i, /^transaction id/i],
   location: [/city\s*\/\s*state/i, /^city$/i, /^state$/i],
@@ -56,6 +58,23 @@ function findColumn(fields, patterns) {
   }
   return null
 }
+
+/**
+ * Which issuer's export this is, inferred from the columns rather than asked.
+ *
+ * A format dropdown is a way to get it wrong: pick the wrong one and the file
+ * parses into silent nonsense. The header row already says what it is —
+ * Capital One splits money across Debit and Credit columns and dates its rows
+ * ISO; Amex uses a single signed Amount under six rows of preamble.
+ */
+export function detectIssuer(fields = [], headerRow = 0) {
+  const has = (re) => fields.some((f) => re.test(String(f || '').trim()))
+  if (has(/^debit$/i) && has(/^credit$/i)) return 'capitalone'
+  if (has(/^amount$/i) && (has(/appears on your statement as/i) || headerRow > 0)) return 'amex'
+  return 'card'
+}
+
+export const ISSUER_LABELS = { amex: 'American Express', capitalone: 'Capital One', card: 'Card' }
 
 /** A statement with no usable header row is rejected rather than guessed at. */
 export function detectColumns(fields = []) {
@@ -105,6 +124,10 @@ const PAYMENT_PATTERNS = [
   /\bpayment\s+received\b/i,
   /\bthank\s+you\b/i,
   /mobile\s+payment/i,
+  // Capital One abbreviates, and files cash-back rewards as credits rather
+  // than as spending. Both are movements on the card, not money spent.
+  /\bpymt\b/i,
+  /cash\s*back\s*reward/i,
 ]
 
 export const isCardPayment = (description) =>
@@ -229,6 +252,34 @@ export const RULES = [
   // it in a real category beats leaving 2.5% of the year unattributed. Toys,
   // gifts and furnishings bought this way will land here too.
   { category: /internet\s*purchase|mail\s*order/i, target: 'Everyday::Personal supplies', fallback: true },
+  // Capital One's vocabulary. "Dining" and "Lodging" already match the Amex
+  // patterns above; these cover the rest.
+  { category: /^gas\/automotive$/i, target: 'Transportation::Fuel', fallback: true },
+  { category: /^merchandise$/i, target: 'Everyday::Personal supplies', fallback: true },
+  { category: /^entertainment$/i, target: 'Entertainment::Other', fallback: true },
+  { category: /^other\s*travel$/i, target: 'Travel::Other', fallback: true },
+  { category: /^fee\/interest\s*charge$/i, target: 'Debt::Credit cards', fallback: true },
+  { category: /^professional\s*services$/i, target: 'Other::Professional fees', fallback: true },
+  { category: /^other\s*services$/i, target: 'Entertainment::Other', fallback: true },
+
+  // -- Capital One ---------------------------------------------------------
+  // Its categories are a different vocabulary from Amex's — "Merchandise",
+  // "Gas/Automotive", "Other" — so most of the work is done by merchant.
+  { merchant: /receiver\s*of\s*taxes/i, target: 'Home::Primary Property taxes' },
+  { merchant: /\bbjs?\s*wholesale/i, target: 'Everyday::Groceries' },
+  { merchant: /interest\s*charge/i, target: 'Debt::Credit cards' },
+  { merchant: /nintendo|playstation|xbox|steam\s*games/i, target: 'Entertainment::Games' },
+  { merchant: /stars\s*and\s*strikes|east\s*islip\s*lanes|gameorama|the\s*pier\s*at/i,
+    target: 'Entertainment::Games' },
+  { merchant: /bayard\s*cutting|austin\s*zoo|toi\s*parks-?rec|chateau\s*comtal/i,
+    target: 'Children::Activities' },
+  { merchant: /sunoco|\besso\b|socar|\btotal\s+\d|station\s*du\s*pont|turismos/i,
+    target: 'Transportation::Fuel' },
+  { merchant: /autoroutes|escota|vinci|area\b|tiefgarage|parking|parc\s|aucat|\bbsm\b|indigo\s*cc|ora\s|semepa|cite\s*park|mignet/i,
+    target: 'Travel::Transportation' },
+  { merchant: /auto\s*wash|car\s*wash/i, target: 'Transportation::Repairs' },
+  { merchant: /cblingua/i, target: 'Other::Professional fees' },
+  { merchant: /coolbreeze/i, target: 'Travel::Other' },
 
   // -- location, where the budget keeps a line per property -----------------
   { category: /cable\s*&\s*internet|internet\s*comm/i,
@@ -370,6 +421,7 @@ export function parseStatement(input) {
 
   const fields = (matrix[headerRow] || []).map((c) => String(c ?? '').trim())
   const cols = detectColumns(fields)
+  const issuer = detectIssuer(fields, headerRow)
   const index = {}
   for (const [key, name] of Object.entries(cols)) {
     index[key] = name ? fields.indexOf(name) : -1
@@ -392,7 +444,14 @@ export function parseStatement(input) {
     const at = (k) => (index[k] >= 0 ? cells[index[k]] : undefined)
 
     const [year, month] = parseCellDate(at('date'))
-    const amount = parseAmount(at('amount'))
+    // Capital One puts spending in Debit and refunds, rewards and payments in
+    // Credit. Reading only Debit drops every credit row silently, which is how
+    // 41 rows of a real statement went missing without an error.
+    const debit = parseAmount(at('amount'))
+    const credit = index.credit >= 0 ? parseAmount(at('credit')) : NaN
+    const amount = Number.isFinite(debit)
+      ? debit
+      : Number.isFinite(credit) ? -credit : NaN
     if (year === null || !Number.isFinite(amount)) continue
 
     const description = String(at('description') ?? '').trim()
@@ -407,7 +466,15 @@ export function parseStatement(input) {
     })
   }
 
-  return { rows, error: '', warnings, columns: cols, headerRow }
+  // A stable key for "which card did this come from", so one card's import can
+  // replace only its own contribution. Derived from the account column when
+  // there is one, because a household may carry two cards from one issuer.
+  const account = rows.length
+    ? String(matrix[headerRow + 1]?.[index.account] ?? '').replace(/\D/g, '').slice(-5)
+    : ''
+  const source = account ? `${issuer}:${account}` : issuer
+
+  return { rows, error: '', warnings, columns: cols, headerRow, issuer, source }
 }
 
 /** CSV text or workbook bytes, both to the same matrix shape. */
@@ -453,6 +520,7 @@ export const CATCH_ALL_CATEGORY = 'Other'
 // one is never a silent no-op.
 export const REQUIRED_ITEMS = [
   { category: 'Other', name: 'Professional fees' },
+  { category: 'Entertainment', name: 'Other' },
 ]
 
 /**
@@ -602,63 +670,61 @@ export function previewRows(summary, data) {
  * Cells the statement says nothing about are left alone, so a manual entry in
  * an untouched month survives.
  */
-export function applySummary(data, summary, at) {
+export function applySummary(data, summary, at, source = 'manual-import') {
   const stamp = at || new Date().toISOString()
 
-  // Months the statement actually covers. Needed because the catch-all line
-  // has to be cleared in those months when nothing lands on it — an earlier
-  // import with a poorer rule set can otherwise leave money stranded there,
-  // and "replace only the cells the statement covers" would never touch it
-  // again. Every other line may hold hand-entered figures, so those are only
-  // written where the statement has something to say.
-  const covered = new Set()
-  for (const row of summary.coveredMonths || summary.months || []) covered.add(row)
-
-  const catchAllId = data.items.find(
-    (i) => norm(i.name) === norm(CATCH_ALL_ITEM) &&
-      data.categories.find((c) => c.id === i.categoryId)?.kind === 'expense',
-  )?.id
+  // Months the statement covers, whether or not anything mapped in them. A
+  // month this source touched but no longer contributes to must have its old
+  // share removed, or money left by a worse rule set stays stranded forever.
+  const covered = new Set(summary.coveredMonths || summary.months || [])
 
   const items = data.items.map((item) => {
     let next = item
+
     for (let month = 0; month < 12; month++) {
       const key = `${item.id}:${month}`
-      const isStaleCatchAll =
-        item.id === catchAllId && covered.has(month) && !summary.cells.has(key)
-      if (isStaleCatchAll) {
-        const actual = [...(next.actual || Array(12).fill(null))]
-        actual[month] = null
-        next = {
-          ...next,
-          actual,
-          fieldsAt: { ...next.fieldsAt, [`actual.${month}`]: stamp },
-          updatedAt: stamp,
-        }
-        continue
-      }
-      if (!summary.cells.has(key)) continue
+      const incoming = summary.cells.get(key)
+      const priorShare = item.imported?.[String(month)]?.[source]
+      const touches = incoming !== undefined || (covered.has(month) && priorShare !== undefined)
+      if (!touches) continue
+
+      // Rebuild this month's per-source breakdown with only this source's
+      // share changed. Other cards, and anything hand-entered, are untouched.
+      const shares = { ...(next.imported?.[String(month)] || {}) }
+      if (incoming === undefined) delete shares[source]
+      else shares[source] = incoming
+
+      const total = Object.values(shares).reduce((a, v) => a + v, 0)
       const actual = [...(next.actual || Array(12).fill(null))]
-      actual[month] = summary.cells.get(key)
+      actual[month] = Object.keys(shares).length ? Math.round(total * 100) / 100 : null
+
+      const imported = { ...(next.imported || {}) }
+      if (Object.keys(shares).length) imported[String(month)] = shares
+      else delete imported[String(month)]
+
       next = {
         ...next,
         actual,
+        imported,
         fieldsAt: { ...next.fieldsAt, [`actual.${month}`]: stamp },
         updatedAt: stamp,
       }
     }
+
     return next
   })
+
   return { ...data, items }
 }
 
 /**
- * Ensure the catch-all line item exists, creating its category if needed.
- * Returns the document unchanged when it is already there, so this is safe to
- * call before every import.
+ * Ensure the catch-all and any line item the rules require exist, creating
+ * their categories if needed. Returns the document unchanged when everything
+ * is already there, so this is safe to call before every import.
  */
 export function ensureCatchAll(data, make, at) {
   const stamp = at || new Date().toISOString()
-  let next = ensureItems(data, REQUIRED_ITEMS, make, stamp)
+  const next = ensureItems(data, REQUIRED_ITEMS, make, stamp)
   return ensureItem(next, CATCH_ALL_CATEGORY, CATCH_ALL_ITEM, make, stamp)
 }
 

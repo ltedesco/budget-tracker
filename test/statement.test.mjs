@@ -204,9 +204,9 @@ test('preview rows carry the category and sort by size', () => {
 
 // --- catch-all: no card dollar may disappear --------------------------------
 
-import { ensureCatchAll, CATCH_ALL_ITEM } from '../src/lib/statement.js'
+import { ensureCatchAll, CATCH_ALL_ITEM, REQUIRED_ITEMS } from '../src/lib/statement.js'
 import { actualCoverage } from '../src/lib/summary.js'
-import { makeCategory as mkCat, makeItem as mkItem } from '../src/lib/model.js'
+import { makeCategory as mkCat, makeItem as mkItem, setCell, mergeItem } from '../src/lib/model.js'
 
 const MAKE = { category: mkCat, item: mkItem }
 
@@ -214,7 +214,7 @@ test('ensureCatchAll creates the lines once and is idempotent', () => {
   const d = budget()
   const once = ensureCatchAll(d, MAKE, BORN)
   // The catch-all plus every line item the rules require but a template lacks.
-  assert.equal(once.items.length, d.items.length + 2)
+  assert.equal(once.items.length, d.items.length + REQUIRED_ITEMS.length + 1)
   assert.ok(once.items.some((i) => i.name === 'Professional fees'))
   assert.ok(once.items.some((i) => i.name === CATCH_ALL_ITEM))
   const twice = ensureCatchAll(once, MAKE, BORN)
@@ -532,7 +532,10 @@ test('every rule names a target shaped Category::Item', () => {
   }
 })
 
-test('a re-import clears money an earlier rule set stranded on the catch-all', () => {
+const JAN_CSV = `Date,Description,Amount,Category
+01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries`
+
+test("a re-import clears money this source's earlier rules stranded", () => {
   // The real failure: an import with poor rules put $37,729 on the catch-all.
   // Better rules then mapped everything, so the new summary had no cell for
   // that line — and "replace only what the statement covers" left the stale
@@ -542,31 +545,128 @@ test('a re-import clears money an earlier rule set stranded on the catch-all', (
   d = {
     ...d,
     items: d.items.map((i) =>
-      i.id === catchAll.id ? { ...i, actual: [37729.8, null, null, null, null, null, null, null, null, null, null, null] } : i),
+      i.id === catchAll.id
+        ? { ...i, actual: [37729.8, ...Array(11).fill(null)], imported: { 0: { 'amex:83008': 37729.8 } } }
+        : i),
   }
 
-  // A statement covering January, where everything now maps to real lines.
-  const csv = `Date,Description,Amount,Category
-01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries`
-  const s = summarise(parseStatement(csv).rows, d)
-  const after = applySummary(d, s, '2026-09-01T00:00:00Z')
-
-  assert.equal(after.items.find((i) => i.id === catchAll.id).actual[0], null, 'stale catch-all must be cleared')
+  const after = applySummary(d, summarise(parseStatement(JAN_CSV).rows, d), '2026-09-01T00:00:00Z', 'amex:83008')
+  assert.equal(after.items.find((i) => i.id === catchAll.id).actual[0], null, 'stale share must be cleared')
   assert.equal(after.items.find((i) => i.name === 'Groceries').actual[0], 152.4)
 })
 
-test('clearing the catch-all only touches months the statement covers', () => {
+test('clearing only touches months the statement covers', () => {
   let d = ensureCatchAll(budget(), MAKE, BORN)
   const catchAll = d.items.find((i) => i.name === CATCH_ALL_ITEM)
   const actual = Array(12).fill(null)
   actual[0] = 100   // January, which the statement covers
   actual[9] = 999   // October, which it does not
-  d = { ...d, items: d.items.map((i) => (i.id === catchAll.id ? { ...i, actual } : i)) }
+  d = {
+    ...d,
+    items: d.items.map((i) =>
+      i.id === catchAll.id
+        ? { ...i, actual, imported: { 0: { 'amex:83008': 100 }, 9: { 'amex:83008': 999 } } }
+        : i),
+  }
 
-  const csv = `Date,Description,Amount,Category
-01/04/2026,WHOLEFDS MARKET,152.40,Merchandise & Supplies-Groceries`
-  const after = applySummary(d, summarise(parseStatement(csv).rows, d), '2026-09-01T00:00:00Z')
+  const after = applySummary(d, summarise(parseStatement(JAN_CSV).rows, d), '2026-09-01T00:00:00Z', 'amex:83008')
   const got = after.items.find((i) => i.id === catchAll.id).actual
   assert.equal(got[0], null, 'covered month cleared')
   assert.equal(got[9], 999, 'untouched month kept')
+})
+
+test('a figure with no recorded source is never destroyed by an import', () => {
+  // Cells predating per-source tracking, and anything typed by hand, cannot be
+  // told apart from each other — so an import leaves them alone rather than
+  // risking deleting something a person entered.
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const catchAll = d.items.find((i) => i.name === CATCH_ALL_ITEM)
+  d = { ...d, items: d.items.map((i) => (i.id === catchAll.id ? { ...i, actual: [500, ...Array(11).fill(null)] } : i)) }
+
+  const after = applySummary(d, summarise(parseStatement(JAN_CSV).rows, d), '2026-09-01T00:00:00Z', 'amex:83008')
+  assert.equal(after.items.find((i) => i.id === catchAll.id).actual[0], 500)
+})
+
+// --- two cards ---------------------------------------------------------------
+//
+// The bug this exists for: import replaces the months it covers, which is
+// right for one source and wrong for two. A Capital One import after an Amex
+// one would have overwritten $9,376 of Amex spending rather than adding to it.
+
+const CARD_A = 'amex:83008'
+const CARD_B = 'capitalone:0377'
+
+const amexCsv = `Date,Description,Amount,Category
+06/04/2026,SOME RESTAURANT,776.82,Restaurant-Restaurant`
+const capOneCsv = `Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit
+2026-06-11,2026-06-12,0377,GOLDEN KITCHEN,Dining,63.66,`
+
+test('a second card adds to the first rather than replacing it', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(amexCsv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  assert.equal(d.items.find((i) => i.name === 'Restaurants').actual[5], 776.82)
+
+  d = applySummary(d, summarise(parseStatement(capOneCsv).rows, d), '2026-09-02T00:00:00Z', CARD_B)
+  const cell = d.items.find((i) => i.name === 'Restaurants')
+  assert.equal(cell.actual[5], 840.48, 'both cards are counted')
+  assert.deepEqual(cell.imported['5'], { [CARD_A]: 776.82, [CARD_B]: 63.66 })
+})
+
+test('order does not matter', () => {
+  let a = ensureCatchAll(budget(), MAKE, BORN)
+  a = applySummary(a, summarise(parseStatement(amexCsv).rows, a), '2026-09-01T00:00:00Z', CARD_A)
+  a = applySummary(a, summarise(parseStatement(capOneCsv).rows, a), '2026-09-02T00:00:00Z', CARD_B)
+
+  let b = ensureCatchAll(budget(), MAKE, BORN)
+  b = applySummary(b, summarise(parseStatement(capOneCsv).rows, b), '2026-09-01T00:00:00Z', CARD_B)
+  b = applySummary(b, summarise(parseStatement(amexCsv).rows, b), '2026-09-02T00:00:00Z', CARD_A)
+
+  assert.equal(
+    a.items.find((i) => i.name === 'Restaurants').actual[5],
+    b.items.find((i) => i.name === 'Restaurants').actual[5],
+  )
+})
+
+test('re-importing one card replaces only its own share', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(amexCsv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  d = applySummary(d, summarise(parseStatement(capOneCsv).rows, d), '2026-09-02T00:00:00Z', CARD_B)
+
+  // A corrected Amex statement for the same month, with a different figure.
+  const corrected = `Date,Description,Amount,Category
+06/04/2026,SOME RESTAURANT,500.00,Restaurant-Restaurant`
+  d = applySummary(d, summarise(parseStatement(corrected).rows, d), '2026-09-03T00:00:00Z', CARD_A)
+
+  const cell = d.items.find((i) => i.name === 'Restaurants')
+  assert.equal(cell.actual[5], 563.66, "Capital One's share survives")
+  assert.deepEqual(cell.imported['5'], { [CARD_A]: 500, [CARD_B]: 63.66 })
+})
+
+test('importing the same card twice is still idempotent', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  const once = applySummary(d, summarise(parseStatement(amexCsv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  const twice = applySummary(once, summarise(parseStatement(amexCsv).rows, once), '2026-09-02T00:00:00Z', CARD_A)
+  assert.equal(
+    once.items.find((i) => i.name === 'Restaurants').actual[5],
+    twice.items.find((i) => i.name === 'Restaurants').actual[5],
+  )
+})
+
+test('typing a figure by hand takes the cell over from the importers', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(amexCsv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  const item = d.items.find((i) => i.name === 'Restaurants')
+  const edited = setCell(item, 'actual', 5, '900', '2026-09-05T00:00:00Z')
+  assert.equal(edited.actual[5], 900)
+  assert.equal(edited.imported['5'], undefined, 'the breakdown is dropped, so it cannot disagree with the total')
+})
+
+test('the per-source breakdown survives a merge between devices', () => {
+  let d = ensureCatchAll(budget(), MAKE, BORN)
+  d = applySummary(d, summarise(parseStatement(amexCsv).rows, d), '2026-09-01T00:00:00Z', CARD_A)
+  const local = d.items.find((i) => i.name === 'Restaurants')
+  const remote = { ...local, updatedAt: '2026-08-01T00:00:00Z' }
+  const merged = mergeItem(local, remote)
+  assert.equal(merged.actual[5], 776.82)
+  assert.deepEqual(merged.imported['5'], { [CARD_A]: 776.82 })
 })

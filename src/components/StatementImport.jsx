@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { MONTHS } from '../lib/model.js'
-import { parseStatement, summarise, previewRows, applySummary, CATCH_ALL_ITEM } from '../lib/statement.js'
+import { parseStatement, summarise, previewRows, applySummary, CATCH_ALL_ITEM, ISSUER_LABELS } from '../lib/statement.js'
 import { money, moneyShort } from '../lib/format.js'
 
 /**
@@ -26,6 +26,8 @@ export default function StatementImport({ data, onApply, onPrepare }) {
     const prepared = onPrepare()
     setResult({
       prepared,
+      issuer: parsed.issuer,
+      source: parsed.source,
       summary: summarise(parsed.rows, prepared),
       warnings: parsed.warnings,
       filename,
@@ -34,7 +36,11 @@ export default function StatementImport({ data, onApply, onPrepare }) {
   }
 
   const apply = () => {
-    onApply(applySummary(result.prepared, result.summary), result.summary, result.filename)
+    onApply(
+      applySummary(result.prepared, result.summary, undefined, result.source),
+      result.summary,
+      result.filename,
+    )
     setResult(null)
   }
 
@@ -45,10 +51,12 @@ export default function StatementImport({ data, onApply, onPrepare }) {
     <div className="panel">
       <h2>Import card statement</h2>
       <p className="small muted" style={{ marginTop: -6 }}>
-        Reads an Amex export — <strong>.xlsx or .csv</strong>, straight from the download, no
-        converting — and fills in the <strong>Actual</strong> layer, so you can see where real
-        spending is landing against plan. Tick <em>include all additional details</em> when
-        exporting; that adds the category column this needs.
+        Reads an Amex or Capital One export — <strong>.xlsx or .csv</strong>, straight from the
+        download, no converting — and fills in the <strong>Actual</strong> layer, so you can see
+        where real spending is landing against plan. The format is detected from the file. Each
+        card is tracked separately, so importing one <strong>never</strong> disturbs another's
+        figures, and you can upload them in any order, any month. For Amex, tick{' '}
+        <em>include all additional details</em> when exporting; that adds the category column.
         Payments to the card are excluded; they are transfers, not spending. Anything without a
         confident category still gets recorded, on an <strong>{CATCH_ALL_ITEM}</strong> line — so
         the actual total is never quieter than what you really charged.
@@ -78,7 +86,9 @@ export default function StatementImport({ data, onApply, onPrepare }) {
       {s && (
         <>
           <p className="small" style={{ marginTop: 14, marginBottom: 6 }}>
-            <strong>{result.filename}</strong> — {s.rowCount} transactions
+            <strong>{ISSUER_LABELS[result.issuer] || 'Card'}</strong>
+            {result.source?.includes(':') && <> ···{result.source.split(':')[1]}</>}
+            {' — '}{s.rowCount} transactions
             {s.monthLabels.length > 0 && <> covering {s.monthLabels.join(', ')}</>}
           </p>
 
@@ -132,8 +142,9 @@ export default function StatementImport({ data, onApply, onPrepare }) {
                 </table>
               </div>
               <p className="small muted" style={{ marginTop: 8 }}>
-                These months are <strong>replaced</strong>, not added to — importing the same file
-                twice lands on the same numbers. Months not shown here keep whatever they hold.
+                These figures replace <strong>this card's</strong> previous contribution to those
+                months, and are added to whatever your other cards contributed. Importing the same
+                file twice lands on the same numbers.
               </p>
             </>
           )}
