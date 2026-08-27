@@ -17,6 +17,7 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
   const [passphrase, setPassphrase] = useState('')
   const [setupIn, setSetupIn] = useState('')
   const [balanceDraft, setBalanceDraft] = useState(String(data.startingBalance ?? 0))
+  const [seed, setSeed] = useState('actual')
   const fileRef = useRef(null)
 
   const missing = configErrors({ ...sync, token })
@@ -65,10 +66,7 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
         <div className="row">
           <label className="field">
             <span>Budget year</span>
-            <input
-              type="number" value={data.year} style={{ width: 120 }}
-              onChange={(e) => actions.setYear(e.target.value)}
-            />
+            <input type="number" value={data.year} readOnly style={{ width: 120 }} />
           </label>
           <label className="field">
             <span>Starting balance</span>
@@ -83,6 +81,26 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
             carries forward from here.
           </span>
         </div>
+        <div className="row" style={{ marginTop: 12, gap: 10, alignItems: 'center' }}>
+          <button onClick={() => actions.rollover(data.year + 1, seed)}>
+            Start {data.year + 1} from {data.year}
+          </button>
+          <label className="field">
+            <span>Next year's plan comes from</span>
+            <select value={seed} onChange={(e) => setSeed(e.target.value)} style={{ width: 220 }}>
+              <option value="actual">what was actually spent</option>
+              <option value="planned">this year's plan</option>
+              <option value="blank">nothing — start empty</option>
+            </select>
+          </label>
+        </div>
+        <p className="small muted">
+          Carries the categories and line items forward keeping their identities, so the years
+          still line up on the Years tab after a rename. Next year opens at this year's closing
+          balance. Seeding from actuals is usually right: a plan built on last year's plan
+          inherits its mistakes.
+        </p>
+
         <div className="row" style={{ marginTop: 12, gap: 10 }}>
           <button onClick={actions.loadTemplate}>Load starter categories…</button>
           <span className="small muted">
@@ -168,8 +186,8 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
         </div>
         <div className="row" style={{ marginTop: 8 }}>
           <label className="field grow">
-            <span>Path</span>
-            <input value={sync.path} placeholder="data/budget-data.json"
+            <span>Path {sync.path.includes('{year}') ? `— this year: ${sync.path.replace(/\{year\}/g, data.year)}` : ''}</span>
+            <input value={sync.path} placeholder="data/budget-{year}.json"
               onChange={(e) => actions.setSync({ path: e.target.value.trim() })} />
           </label>
         </div>

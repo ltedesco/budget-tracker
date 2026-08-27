@@ -1,6 +1,6 @@
-# Budget Tracker
+# TrueLine
 
-An annual expense-and-income budget: fifteen expense categories and two income
+An annual expense-and-income budget, year on year: fifteen expense categories and two income
 categories, each with line items carrying twelve monthly values. Every line item
 holds both a **plan** and an **actual**, so the tracker shows what you expected,
 what really happened, and the variance between them.
@@ -24,9 +24,9 @@ GitHub Pages is public on a free account.
 | Where | What |
 | --- | --- |
 | this repo | the app: React + Vite, deployed to Pages by `.github/workflows/deploy-pages.yml` |
-| a **private** repo | `data/budget-data.json` — the real numbers, written through the GitHub Contents API |
+| a **private** repo | `data/budget-{year}.json` — the real numbers, written through the GitHub Contents API |
 
-`data/budget-data.json` is gitignored here so the data file can never be
+`data/budget-{year}.json` is gitignored here so the data file can never be
 committed from the app side by accident.
 
 ## Getting your spreadsheet in
@@ -78,7 +78,7 @@ The app reads and writes one JSON file through the GitHub Contents API, so the
 repository is the source of truth.
 
 1. Use a **private** repository for the data, with a file at
-   `data/budget-data.json`. An empty repo also works — the first push creates
+   `data/budget-{year}.json`. An empty repo also works — the first push creates
    the file.
 2. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new):
    - **Repository access:** only that one repository.
@@ -92,7 +92,7 @@ so a burst of entries becomes one commit rather than one per keystroke.
 ### Why a separate repository
 
 Do not point sync at the repo serving the site. Pages needs that repo public on
-a free account, and a committed `data/budget-data.json` would publish your
+a free account, and a committed `data/budget-{year}.json` would publish your
 salary, mortgage balance and account balances to anyone who looks.
 
 ### About the token

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SummaryTab from './components/SummaryTab.jsx'
+import YearsTab from './components/YearsTab.jsx'
 import BudgetGrid from './components/BudgetGrid.jsx'
 import DataTab from './components/DataTab.jsx'
 import Toast from './components/Toast.jsx'
@@ -8,6 +9,7 @@ import {
   copyLayer, fillRow, makeCategory, makeItem, nowISO, setCell, setItemField, toCell,
 } from './lib/model.js'
 import { templateData } from './lib/template.js'
+import { rollover } from './lib/years.js'
 import { money } from './lib/format.js'
 import { applyTheme, resolveTheme, THEMES } from './lib/theme.js'
 import { itemsOf } from './lib/summary.js'
@@ -16,16 +18,20 @@ import { addTransaction, removeTransaction } from './lib/ledger.js'
 import { pullMerged, pushMerged } from './lib/sync.js'
 import { decryptToken, encryptToken, makeSetupCode, readSetupCode } from './lib/crypto.js'
 import {
-  loadLocal, loadPrefs, loadSessionToken, loadSyncConfig,
-  saveLocal, savePrefs, saveSessionToken, saveSyncConfig,
+  loadLocal, loadPrefs, loadSessionToken, loadSyncConfig, loadActiveYear,
+  saveLocal, savePrefs, saveSessionToken, saveSyncConfig, saveActiveYear,
+  knownYears as readKnownYears, migrateLegacyYear, pathForYear,
 } from './lib/storage.js'
 
 const TABS = [
   ['summary', 'Summary'],
   ['expenses', 'Expenses'],
   ['income', 'Income'],
+  ['years', 'Years'],
   ['data', 'Setup & Sync'],
 ]
+
+const APP_NAME = 'TrueLine'
 
 const UNDO_MS = 8000
 const AUTOPUSH_DEBOUNCE_MS = 3000
@@ -43,7 +49,15 @@ function describe(before, after) {
 }
 
 export default function App() {
-  const [data, setData] = useState(loadLocal)
+  // A document per year, on its own storage key and its own file. Migrate any
+  // pre-multi-year document first, or the first load after upgrading would look
+  // like every figure had vanished.
+  const [year, setYear] = useState(() => {
+    const migrated = migrateLegacyYear()
+    return loadActiveYear(migrated || new Date().getFullYear())
+  })
+  const [years, setYears] = useState(readKnownYears)
+  const [data, setData] = useState(() => loadLocal(year))
   const [sync, setSyncState] = useState(loadSyncConfig)
   // The token is deliberately not part of `sync`: `sync` is persisted to
   // localStorage, and the whole point is that the token never lands there.
@@ -66,7 +80,12 @@ export default function App() {
   const undoRef = useRef(null)
   const toastTimer = useRef(null)
 
-  useEffect(() => { dataRef.current = data; saveLocal(data) }, [data])
+  useEffect(() => {
+    dataRef.current = data
+    saveLocal(data)
+    setYears((prev) => (prev.includes(data.year) ? prev : [...prev, data.year].sort((a, b) => b - a)))
+  }, [data])
+  useEffect(() => { saveActiveYear(year) }, [year])
   useEffect(() => { saveSyncConfig(sync) }, [sync])
   useEffect(() => { savePrefs(prefs) }, [prefs])
 
@@ -125,7 +144,14 @@ export default function App() {
   useEffect(() => { syncRef.current = sync }, [sync])
 
   /** Persisted settings plus the in-memory token — what the API actually needs. */
-  const activeConfig = useCallback(() => ({ ...syncRef.current, token: tokenRef.current }), [])
+  const activeConfig = useCallback(
+    (forYear) => {
+      const sync = syncRef.current
+      const target = forYear ?? dataRef.current.year
+      return { ...sync, path: pathForYear(sync.path, target), token: tokenRef.current }
+    },
+    [],
+  )
 
   /**
    * Adopt a merged document. Returns false when nothing changed, which keeps a
@@ -264,9 +290,31 @@ export default function App() {
       setStartingBalance: (value) =>
         commit({ ...d(), startingBalance: toCell(value) ?? 0, startingBalanceAt: nowISO() }),
 
-      setYear: (value) => {
-        const year = Number(value)
-        if (Number.isFinite(year) && year > 1970) commit({ ...d(), year })
+      /** Switch to another year, loading that year's document. */
+      switchYear: (next) => {
+        const target = Number(next)
+        if (!Number.isFinite(target) || target < 1970) return
+        const doc = loadLocal(target)
+        dataRef.current = doc
+        setData(doc)
+        setYear(target)
+        setSyncStatus({ busy: false, message: '', error: '' })
+      },
+
+      /** Create next year from this one, carrying the structure forward. */
+      rollover: (nextYear, seed) => {
+        const target = Number(nextYear)
+        const existing = loadLocal(target)
+        if (existing.items.length) {
+          showToast(`${target} already exists — switch to it instead of starting it again.`)
+          return
+        }
+        const created = rollover(d(), target, { seed })
+        saveLocal(created)
+        dataRef.current = created
+        setData(created)
+        setYear(target)
+        showToast(`Started ${target} from ${d().year === target ? 'the previous year' : 'this year'}.`)
       },
 
       loadTemplate: () => {
@@ -404,7 +452,17 @@ export default function App() {
   return (
     <div className={`wrap${tab === 'data' ? '' : ' wide'}`}>
       <header className="app-head">
-        <h1>Budget {data.year}</h1>
+        <h1>{APP_NAME}</h1>
+        <select
+          className="year-select"
+          value={year}
+          aria-label="Budget year"
+          onChange={(e) => actions.switchYear(e.target.value)}
+        >
+          {[...new Set([...years, year])].sort((a, b) => b - a).map((y) => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
         <span className="sync-state">{syncStatus.error ? <span className="err">{syncStatus.error}</span> : syncLabel}</span>
         <div className="theme-switch" role="group" aria-label="Colour theme">
           {THEMES.map((choice) => (
@@ -481,6 +539,15 @@ export default function App() {
             onInspectMode={setInspect}
           />
         </div>
+      )}
+
+      {tab === 'years' && (
+        <YearsTab
+          docs={[...new Set([...years, year])].sort((a, b) => a - b).map((y) => (y === year ? data : loadLocal(y))).filter((doc) => doc.items.length)}
+          knownYears={years}
+          activeYear={year}
+          onLoadYear={actions.switchYear}
+        />
       )}
 
       {tab === 'data' && (

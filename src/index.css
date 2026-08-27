@@ -288,3 +288,10 @@ th.derived { text-align: right; }
   .modal { padding: 16px; }
   .modal .data-table td, .modal .data-table th { padding: 5px 6px; }
 }
+
+/* Year selector beside the wordmark. Deliberately quiet: it is a switch between
+   documents, not a filter. */
+.year-select {
+  width: auto; padding: 4px 8px; font-size: 14px; font-weight: 600;
+  border-radius: 8px; background: var(--panel); border: 1px solid var(--line);
+}
