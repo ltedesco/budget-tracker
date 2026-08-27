@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import Modal from './Modal.jsx'
+import StatementImport from './StatementImport.jsx'
 import { copyText, downloadFile, money } from '../lib/format.js'
 import { configErrors } from '../lib/github.js'
 import { budgetCSV } from '../lib/summary.js'
@@ -135,6 +136,8 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
           {importError && <span className="small err">{importError}</span>}
         </div>
       </div>
+
+      <StatementImport data={data} onApply={actions.applyStatement} />
 
       <div className="panel">
         <h2>GitHub sync</h2>

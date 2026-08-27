@@ -279,6 +279,17 @@ export default function App() {
         )
       },
 
+      // Statement import writes only the actual layer, and is undoable like
+      // any other bulk change.
+      applyStatement: (next, summary, filename) => {
+        const cells = summary.cells.size
+        commit(
+          next,
+          `Recorded ${plural(cells, 'month of spending', 'monthly totals')} from ${filename}.`,
+          true,
+        )
+      },
+
       setSync: setSyncField,
 
       /** Encrypt the token under a passphrase and keep it unlocked for this tab. */
