@@ -4,6 +4,13 @@
 # repository needs GitHub Pro or Team. The data file is NOT part of this build —
 # it lives in a private repo and is fetched at runtime through the Contents API.
 
+# Actions are pinned to commit SHAs, not tags. A tag is a movable pointer: if
+# one were repointed at malicious code, it would run here with write access to
+# the published site — and this site holds a credential in the visitor's
+# browser. A SHA cannot be moved. The trailing comment records which version
+# each SHA is, so they can be bumped deliberately; they will not update on
+# their own, which is the point.
+
 name: Deploy to GitHub Pages
 
 on:
@@ -25,9 +32,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -43,7 +50,7 @@ jobs:
       # repo's Pages setting does not have to be flipped by hand.
       - name: Configure Pages
         id: pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
         with:
           enablement: true
 
@@ -52,7 +59,7 @@ jobs:
         env:
           BASE_PATH: ${{ steps.pages.outputs.base_path }}/
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: ./dist
 
@@ -64,4 +71,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
