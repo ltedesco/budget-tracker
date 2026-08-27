@@ -8,7 +8,9 @@ import {
   copyLayer, fillRow, makeCategory, makeItem, nowISO, setCell, setItemField, toCell,
 } from './lib/model.js'
 import { templateData } from './lib/template.js'
+import { money } from './lib/format.js'
 import { itemsOf } from './lib/summary.js'
+import { ensureCatchAll } from './lib/statement.js'
 import { pullMerged, pushMerged } from './lib/sync.js'
 import { decryptToken, encryptToken, makeSetupCode, readSetupCode } from './lib/crypto.js'
 import {
@@ -283,12 +285,18 @@ export default function App() {
       // any other bulk change.
       applyStatement: (next, summary, filename) => {
         const cells = summary.cells.size
+        const swept = summary.totals.swept
         commit(
           next,
-          `Recorded ${plural(cells, 'month of spending', 'monthly totals')} from ${filename}.`,
+          `Recorded ${plural(cells, 'monthly total', 'monthly totals')} from ${filename}` +
+            (swept ? `, ${money(swept)} of it unassigned.` : '.'),
           true,
         )
       },
+
+      /** The import needs its catch-all line to exist before it can sweep. */
+      prepareForStatement: () =>
+        ensureCatchAll(d(), { category: makeCategory, item: makeItem }),
 
       setSync: setSyncField,
 

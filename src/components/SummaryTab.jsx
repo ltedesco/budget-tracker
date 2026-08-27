@@ -4,7 +4,7 @@ import {
   CartesianGrid, Tooltip, Legend,
 } from 'recharts'
 import { MONTHS } from '../lib/model.js'
-import { summaryFor, chartSeries, topCategories, monthsWithActuals } from '../lib/summary.js'
+import { summaryFor, chartSeries, topCategories, monthsWithActuals, actualCoverage } from '../lib/summary.js'
 import { money, moneyShort, signed } from '../lib/format.js'
 
 // Colours carry series identity in the charts, but every series is also
@@ -16,6 +16,7 @@ export default function SummaryTab({ data, layer }) {
   const actual = useMemo(() => summaryFor(data, 'actual'), [data])
   const series = useMemo(() => chartSeries(data), [data])
   const withActuals = useMemo(() => monthsWithActuals(data), [data])
+  const coverage = useMemo(() => actualCoverage(data), [data])
 
   const view = layer === 'actual' ? actual : planned
   const label = layer === 'actual' ? 'Actual' : 'Planned'
@@ -28,6 +29,18 @@ export default function SummaryTab({ data, layer }) {
         <Card label="Net savings" value={view.totals.net} tone={view.totals.net >= 0 ? 'up' : 'down'} />
         <Card label="Ending balance" value={view.totals.ending} tone={view.totals.ending >= 0 ? '' : 'down'} />
       </div>
+
+      {layer === 'actual' && coverage.planned > 0 && coverage.ratio < 0.95 && (
+        <p className="note">
+          <strong>Actuals cover {Math.round(coverage.ratio * 100)}% of planned expenses</strong> —{' '}
+          {money(coverage.covered)} of {money(coverage.planned)}, across{' '}
+          {coverage.trackedItems} of {coverage.plannedItems} budgeted line items.{' '}
+          {money(coverage.uncovered)} of the plan has nothing recorded against it, so the totals
+          above are <strong>not</strong> a like-for-like comparison with the plan and will always
+          look like an underspend. Read the per-category variance instead, and only for the
+          categories that have actuals.
+        </p>
+      )}
 
       {layer === 'actual' && withActuals.length > 0 && withActuals.length < 12 && (
         <p className="note">

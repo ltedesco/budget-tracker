@@ -137,7 +137,7 @@ export default function DataTab({ data, sync, token, syncStatus, actions }) {
         </div>
       </div>
 
-      <StatementImport data={data} onApply={actions.applyStatement} />
+      <StatementImport data={data} onApply={actions.applyStatement} onPrepare={actions.prepareForStatement} />
 
       <div className="panel">
         <h2>GitHub sync</h2>

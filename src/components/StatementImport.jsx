@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { MONTHS } from '../lib/model.js'
-import { parseStatement, summarise, previewRows, applySummary } from '../lib/statement.js'
+import { parseStatement, summarise, previewRows, applySummary, CATCH_ALL_ITEM } from '../lib/statement.js'
 import { money, moneyShort } from '../lib/format.js'
 
 /**
@@ -11,7 +11,7 @@ import { money, moneyShort } from '../lib/format.js'
  * is always visible what the import is about to do — and, just as important,
  * what it is declining to do.
  */
-export default function StatementImport({ data, onApply }) {
+export default function StatementImport({ data, onApply, onPrepare }) {
   const [result, setResult] = useState(null) // { summary, rows, warnings, filename }
   const [error, setError] = useState('')
   const fileRef = useRef(null)
@@ -21,8 +21,12 @@ export default function StatementImport({ data, onApply }) {
     if (parsed.error) { setError(parsed.error); setResult(null); return }
     if (!parsed.rows.length) { setError('No transactions found in that file.'); setResult(null); return }
     setError('')
+    // Sweeping needs the catch-all line to exist, so summarise against the
+    // prepared document rather than the current one.
+    const prepared = onPrepare()
     setResult({
-      summary: summarise(parsed.rows, data),
+      prepared,
+      summary: summarise(parsed.rows, prepared),
       warnings: parsed.warnings,
       filename,
       statementTotal: parsed.rows.reduce((a, r) => a + r.amount, 0),
@@ -30,12 +34,12 @@ export default function StatementImport({ data, onApply }) {
   }
 
   const apply = () => {
-    onApply(applySummary(data, result.summary), result.summary, result.filename)
+    onApply(applySummary(result.prepared, result.summary), result.summary, result.filename)
     setResult(null)
   }
 
   const s = result?.summary
-  const rows = s ? previewRows(s, data) : []
+  const rows = s ? previewRows(s, result.prepared) : []
 
   return (
     <div className="panel">
@@ -44,7 +48,9 @@ export default function StatementImport({ data, onApply }) {
         Reads an Amex CSV export and fills in the <strong>Actual</strong> layer, so you can see
         where real spending is landing against plan. Export from Amex as <strong>CSV</strong> with{' '}
         <em>include all additional details</em> ticked — that adds the category column this needs.
-        Payments to the card are excluded; they are transfers, not spending.
+        Payments to the card are excluded; they are transfers, not spending. Anything without a
+        confident category still gets recorded, on an <strong>{CATCH_ALL_ITEM}</strong> line — so
+        the actual total is never quieter than what you really charged.
       </p>
 
       <div className="row" style={{ gap: 10 }}>
@@ -74,10 +80,14 @@ export default function StatementImport({ data, onApply }) {
           <table className="data-table" style={{ marginTop: 10, maxWidth: 520 }}>
             <tbody>
               <Bucket label="Will be recorded" value={s.totals.assigned} strong />
+              {s.totals.swept > 0 && (
+                <Bucket label="— of which unassigned" value={s.totals.swept} muted indent />
+              )}
               <Bucket label="Card payments (excluded)" value={s.totals.payments} muted />
               <Bucket label={`Not in ${data.year} (skipped)`} value={s.totals.wrongYear} muted />
-              <Bucket label="No category match" value={s.totals.unmatched} warn={s.totals.unmatched > 0} />
-              <Bucket label="No such line item" value={s.totals.missingItem} warn={s.totals.missingItem > 0} />
+              {s.totals.missingItem > 0 && (
+                <Bucket label="No such line item" value={s.totals.missingItem} warn />
+              )}
               <tr>
                 <th style={{ textAlign: 'left' }}>Statement total</th>
                 <td className="num">{money(result.statementTotal)}</td>
@@ -123,8 +133,10 @@ export default function StatementImport({ data, onApply }) {
             <>
               <h2 style={{ marginTop: 18 }}>Not assigned</h2>
               <p className="small muted" style={{ marginTop: -6 }}>
-                No confident mapping for these, so they are left out rather than guessed at. Enter
-                them by hand, or tell me what they should map to and I will add the rule.
+                No confident mapping, so these are recorded on the{' '}
+                <strong>{CATCH_ALL_ITEM}</strong> line rather than guessed into a category. The
+                money is counted; only the breakdown is missing. Move it by hand, or say what these
+                should map to and the rule can be added.
               </p>
               <table className="data-table" style={{ maxWidth: 520 }}>
                 <tbody>
@@ -160,10 +172,13 @@ export default function StatementImport({ data, onApply }) {
   )
 }
 
-function Bucket({ label, value, strong, muted, warn }) {
+function Bucket({ label, value, strong, muted, warn, indent }) {
   return (
     <tr>
-      <th style={{ textAlign: 'left', fontWeight: strong ? 600 : 400 }} className={muted ? 'muted' : ''}>
+      <th
+        style={{ textAlign: 'left', fontWeight: strong ? 600 : 400, paddingLeft: indent ? 22 : undefined }}
+        className={muted ? 'muted' : ''}
+      >
         {label}
       </th>
       <td className={`num ${warn ? 'down' : ''}`} style={{ fontWeight: strong ? 600 : 400 }}>

@@ -91,11 +91,20 @@ test('transactions from another year are held back, not folded into January', ()
   assert.ok(groceriesJan.every(([, v]) => v !== 999))
 })
 
-test('unmatched categories are reported with their money, not dropped silently', () => {
-  const { rows } = parseStatement(CSV)
-  const s = summarise(rows, budget())
-  assert.equal(s.totals.unmatched, 75)
-  assert.equal(s.unmatched[0].category, 'Business Services-Other')
+test('unmatched categories are always reported by name, whatever happens to the money', () => {
+  // Sweeping is on by default, so the money is destined for the catch-all —
+  // but the category is still surfaced, because that is how the mapping gets
+  // improved. Which bucket the money lands in depends on whether the catch-all
+  // line exists yet; that it is never silently dropped does not.
+  const withoutLine = summarise(parseStatement(CSV).rows, budget())
+  assert.equal(withoutLine.totals.unmatched, 0, 'money is not left in limbo')
+  assert.equal(withoutLine.totals.missingItem, 75, 'it is reported as needing the catch-all line')
+  assert.ok(withoutLine.missingItem.some((m) => m.name === 'Unassigned card spend'))
+
+  // With sweeping explicitly off, it is held back and named as unmatched.
+  const heldBack = summarise(parseStatement(CSV).rows, budget(), { catchAll: false })
+  assert.equal(heldBack.totals.unmatched, 75)
+  assert.equal(heldBack.unmatched[0].category, 'Business Services-Other')
 })
 
 test('every dollar is accounted for in exactly one bucket', () => {
@@ -186,4 +195,105 @@ test('preview rows carry the category and sort by size', () => {
   assert.equal(rows[0].name, 'Groceries')
   assert.equal(rows[0].category, 'Everyday')
   assert.equal(rows[0].total, 357)
+})
+
+// --- catch-all: no card dollar may disappear --------------------------------
+
+import { ensureCatchAll, CATCH_ALL_ITEM } from '../src/lib/statement.js'
+import { actualCoverage } from '../src/lib/summary.js'
+import { makeCategory as mkCat, makeItem as mkItem } from '../src/lib/model.js'
+
+const MAKE = { category: mkCat, item: mkItem }
+
+test('ensureCatchAll creates the line once and is idempotent', () => {
+  const d = budget()
+  const once = ensureCatchAll(d, MAKE, BORN)
+  assert.equal(once.items.length, d.items.length + 1)
+  assert.ok(once.items.some((i) => i.name === CATCH_ALL_ITEM))
+  const twice = ensureCatchAll(once, MAKE, BORN)
+  assert.equal(twice.items.length, once.items.length)
+})
+
+test('unmatched spending is swept into the catch-all, not dropped', () => {
+  const d = ensureCatchAll(budget(), MAKE, BORN)
+  const s = summarise(parseStatement(CSV).rows, d)
+  const catchAll = d.items.find((i) => i.name === CATCH_ALL_ITEM)
+  // The Business Services row has no confident mapping.
+  assert.equal(s.cells.get(`${catchAll.id}:2`), 75)
+  assert.equal(s.totals.swept, 75)
+  // Still reported by category so the mapping can be improved.
+  assert.ok(s.unmatched.some((u) => u.category === 'Business Services-Other'))
+})
+
+test('with sweeping on, every non-excluded dollar is recorded', () => {
+  const d = ensureCatchAll(budget(), MAKE, BORN)
+  const rows = parseStatement(CSV).rows
+  const s = summarise(rows, d)
+  const spendable = rows
+    .filter((r) => !r.payment && r.year === d.year)
+    .reduce((a, r) => a + r.amount, 0)
+  assert.equal(Math.round(s.totals.assigned * 100), Math.round(spendable * 100))
+  assert.equal(s.totals.missingItem, 0)
+})
+
+test('swept money is part of assigned, not a bucket beside it', () => {
+  const d = ensureCatchAll(budget(), MAKE, BORN)
+  const rows = parseStatement(CSV).rows
+  const s = summarise(rows, d)
+  const total = rows.reduce((a, r) => a + r.amount, 0)
+  const bucketed = s.totals.assigned + s.totals.payments + s.totals.wrongYear + s.totals.missingItem
+  assert.equal(Math.round(bucketed * 100), Math.round(total * 100))
+  assert.ok(s.totals.swept <= s.totals.assigned)
+})
+
+test('sweeping can be turned off, and then unmatched money is held back', () => {
+  const d = ensureCatchAll(budget(), MAKE, BORN)
+  const s = summarise(parseStatement(CSV).rows, d, { catchAll: false })
+  assert.equal(s.totals.swept, 0)
+  assert.equal(s.totals.unmatched, 75)
+})
+
+// --- coverage: never compare a partial actual to a full plan ----------------
+
+test('coverage is zero when nothing has been recorded', () => {
+  const d = budget()
+  d.items.find((i) => i.name === 'Groceries').planned = Array(12).fill(1000)
+  const c = actualCoverage(d)
+  assert.equal(c.planned, 12000)
+  assert.equal(c.covered, 0)
+  assert.equal(c.ratio, 0)
+})
+
+test('coverage counts planned money on lines that have any actual', () => {
+  const d = budget()
+  const groceries = d.items.find((i) => i.name === 'Groceries')
+  const fuel = d.items.find((i) => i.name === 'Fuel')
+  groceries.planned = Array(12).fill(1000)   // 12,000 planned
+  fuel.planned = Array(12).fill(100)         //  1,200 planned
+  groceries.actual[0] = 950                  // only groceries tracked
+  const c = actualCoverage(d)
+  assert.equal(c.planned, 13200)
+  assert.equal(c.covered, 12000)
+  assert.equal(c.uncovered, 1200)
+  assert.equal(c.trackedItems, 1)
+  assert.equal(c.plannedItems, 2)
+  assert.ok(Math.abs(c.ratio - 12000 / 13200) < 1e-9)
+})
+
+test('spending on an unbudgeted line counts as tracked without inflating planned', () => {
+  const d = budget()
+  d.items.find((i) => i.name === 'Groceries').planned = Array(12).fill(1000)
+  d.items.find((i) => i.name === 'Clothes').actual[3] = 220   // no plan for this line
+  const c = actualCoverage(d)
+  assert.equal(c.planned, 12000)
+  assert.equal(c.trackedItems, 1)
+  assert.equal(c.plannedItems, 1)
+})
+
+test('coverage ignores income lines', () => {
+  const d = budget()
+  const inc = mkCat({ kind: 'income', name: 'Wages', order: 9 }, BORN)
+  d.categories.push(inc)
+  d.items.push(mkItem({ categoryId: inc.id, name: 'Salary', order: 0, planned: Array(12).fill(9999) }, BORN))
+  assert.equal(actualCoverage(d).planned, 0)
 })

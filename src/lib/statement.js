@@ -174,6 +174,15 @@ export function parseStatement(text) {
 
 const norm = (s) => String(s || '').trim().toLowerCase()
 
+// Where card spending goes when no confident category mapping exists.
+//
+// The alternative — dropping it — is what makes an import dangerous: actual
+// totals come out lower than reality and the budget reads as an underspend.
+// A visible bucket keeps the invariant that matters: every dollar charged to
+// the card appears somewhere in the actual column.
+export const CATCH_ALL_ITEM = 'Unassigned card spend'
+export const CATCH_ALL_CATEGORY = 'Other'
+
 /**
  * Fold rows into per-line-item monthly totals for one budget year.
  *
@@ -182,7 +191,7 @@ const norm = (s) => String(s || '').trim().toLowerCase()
  * bucket accounts for. The totals must reconcile — assigned + unmatched +
  * payments + wrongYear should equal the statement.
  */
-export function summarise(rows, data) {
+export function summarise(rows, data, { catchAll = true } = {}) {
   const byName = new Map()
   for (const item of data.items) {
     const cat = data.categories.find((c) => c.id === item.categoryId)
@@ -195,6 +204,7 @@ export function summarise(rows, data) {
   let payments = 0
   let wrongYear = 0
   let assigned = 0
+  let swept = 0
 
   for (const row of rows) {
     if (row.payment || row.amount < 0) {
@@ -204,23 +214,29 @@ export function summarise(rows, data) {
     }
     if (row.year !== data.year) { wrongYear += row.amount; continue }
 
+    // Unmatched rows are still reported by category — knowing WHAT is
+    // unassigned is how the mapping gets improved — but the money itself is
+    // swept into the catch-all rather than dropped.
     if (!row.target) {
       const key = row.category || '(no category)'
       const prev = unmatched.get(key) || { total: 0, count: 0 }
       unmatched.set(key, { total: prev.total + row.amount, count: prev.count + 1 })
-      continue
+      if (!catchAll) continue
     }
 
-    const item = byName.get(norm(row.target))
+    const targetName = row.target || CATCH_ALL_ITEM
+    const item = byName.get(norm(targetName))
     if (!item) {
-      const prev = missingItem.get(row.target) || { total: 0, count: 0 }
-      missingItem.set(row.target, { total: prev.total + row.amount, count: prev.count + 1 })
+      const prev = missingItem.get(targetName) || { total: 0, count: 0 }
+      missingItem.set(targetName, { total: prev.total + row.amount, count: prev.count + 1 })
+      if (!row.target) unmatched.delete(row.category || '(no category)')
       continue
     }
 
     const key = `${item.id}:${row.month}`
     cells.set(key, round2((cells.get(key) || 0) + row.amount))
     assigned += row.amount
+    if (!row.target) swept += row.amount
   }
 
   const months = [...new Set([...cells.keys()].map((k) => Number(k.split(':')[1])))].sort((a, b) => a - b)
@@ -235,10 +251,16 @@ export function summarise(rows, data) {
     missingItem: [...missingItem.entries()]
       .map(([name, v]) => ({ name, ...v, total: round2(v.total) }))
       .sort((a, b) => b.total - a.total),
+    // `swept` is a subset of `assigned`, not a bucket beside it: it says how
+    // much of what will be recorded landed in the catch-all rather than a real
+    // category. Reconciliation is assigned + payments + wrongYear + missingItem
+    // (+ unmatched only when sweeping is off).
+    catchAll,
     totals: {
       assigned: round2(assigned),
       payments: round2(payments),
       wrongYear: round2(wrongYear),
+      swept: round2(swept),
       unmatched: round2([...unmatched.values()].reduce((a, v) => a + v.total, 0)),
       missingItem: round2([...missingItem.values()].reduce((a, v) => a + v.total, 0)),
     },
@@ -294,4 +316,34 @@ export function applySummary(data, summary, at) {
     return next
   })
   return { ...data, items }
+}
+
+/**
+ * Ensure the catch-all line item exists, creating its category if needed.
+ * Returns the document unchanged when it is already there, so this is safe to
+ * call before every import.
+ */
+export function ensureCatchAll(data, make, at) {
+  const stamp = at || new Date().toISOString()
+  const existing = data.items.find(
+    (i) => norm(i.name) === norm(CATCH_ALL_ITEM) &&
+      data.categories.find((c) => c.id === i.categoryId)?.kind === 'expense',
+  )
+  if (existing) return data
+
+  let category = data.categories.find(
+    (c) => c.kind === 'expense' && norm(c.name) === norm(CATCH_ALL_CATEGORY),
+  )
+  const categories = [...data.categories]
+  if (!category) {
+    category = make.category(
+      { kind: 'expense', name: CATCH_ALL_CATEGORY, order: categories.length },
+      stamp,
+    )
+    categories.push(category)
+  }
+
+  const order = data.items.filter((i) => i.categoryId === category.id).length
+  const item = make.item({ categoryId: category.id, name: CATCH_ALL_ITEM, order }, stamp)
+  return { ...data, categories, items: [...data.items, item] }
 }

@@ -185,3 +185,45 @@ export function budgetCSV(data) {
 
   return rows.map((r) => r.map(csvCell).join(',')).join('\n')
 }
+
+// --- coverage ---------------------------------------------------------------
+//
+// A partial actual column compared against a full-year plan always looks like
+// an underspend. That is the most dangerous way to misread this budget, so the
+// app states plainly how much of the plan the actuals actually account for
+// rather than leaving the top-line variance to speak for itself.
+
+/**
+ * How much of planned expense sits on line items that have any actual recorded.
+ * Returns amounts and counts for both sides of the comparison.
+ */
+export function actualCoverage(data, kind = 'expense') {
+  const ids = new Set(categoriesOf(data, kind).map((c) => c.id))
+  let planned = 0
+  let covered = 0
+  let trackedItems = 0
+  let plannedItems = 0
+
+  for (const it of data.items) {
+    if (!ids.has(it.categoryId)) continue
+    const plan = sumMonths(it.planned)
+    const hasActual = (it.actual || []).some((v) => v !== null && v !== undefined)
+    if (plan > 0) {
+      planned += plan
+      plannedItems += 1
+      if (hasActual) { covered += plan; trackedItems += 1 }
+    } else if (hasActual) {
+      // Spending on a line that was never budgeted still counts as tracked.
+      trackedItems += 1
+    }
+  }
+
+  return {
+    planned,
+    covered,
+    uncovered: planned - covered,
+    ratio: planned > 0 ? covered / planned : 0,
+    trackedItems,
+    plannedItems,
+  }
+}
