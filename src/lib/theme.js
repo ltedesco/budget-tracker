@@ -14,6 +14,31 @@ const CHART = {
   dark: { income: '#12a594', expense: '#e2650f', balance: '#7c7ff2', grid: '#2b323c', axis: '#9aa4b2' },
 }
 
+/**
+ * Eight categorical hues for the per-category breakdown, in fixed order.
+ *
+ * Validated in both modes on the adjacent pairlist, which is the one that
+ * governs stacked bars: worst adjacent colour-vision separation is 9.1 light
+ * and 8.4 dark against a target of 8, and worst normal-vision separation 19.6
+ * and 19.3 against a floor of 15. The dark column is the same eight hues
+ * re-stepped for the dark surface, not the light set inverted.
+ *
+ * Three light hues sit under 3:1 against the surface. That is allowed only
+ * where something other than colour carries identity, so the breakdown always
+ * ships a legend naming every series, a tooltip listing them by name, and the
+ * monthly table underneath.
+ */
+const CATEGORY = {
+  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'],
+  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
+}
+
+/** Everything past the eighth series, folded together. Deliberately neutral. */
+const OTHER = { light: '#94a3b8', dark: '#64748b' }
+
+export const categoryColors = (resolved) => CATEGORY[resolved] || CATEGORY.light
+export const otherColor = (resolved) => OTHER[resolved] || OTHER.light
+
 /** What the browser is actually showing, resolving 'system' against the OS. */
 export function resolveTheme(choice) {
   if (choice === 'light' || choice === 'dark') return choice

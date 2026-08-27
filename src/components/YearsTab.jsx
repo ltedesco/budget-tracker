@@ -1,5 +1,7 @@
 import { Fragment, useMemo } from 'react'
-import { compareYears, yearTotals } from '../lib/years.js'
+import { categoryYearSeries, compareYears, yearTotals } from '../lib/years.js'
+import CategoryChart from './CategoryChart.jsx'
+import { chartColors } from '../lib/theme.js'
 import { moneyShort, signed } from '../lib/format.js'
 
 /**
@@ -10,10 +12,13 @@ import { moneyShort, signed } from '../lib/format.js'
  * between them is the thing a budget exists to surface, but the change column
  * tracks what really happened.
  */
-export default function YearsTab({ docs, onLoadYear, knownYears, activeYear }) {
+export default function YearsTab({ docs, onLoadYear, knownYears, activeYear, theme = 'light' }) {
   const { years, rows } = useMemo(() => compareYears(docs), [docs])
   const income = useMemo(() => yearTotals(docs, 'income'), [docs])
   const expense = useMemo(() => yearTotals(docs, 'expense'), [docs])
+  const INK = useMemo(() => chartColors(theme), [theme])
+  // Actual, not planned: two plans compared say only how intentions changed.
+  const byCategory = useMemo(() => categoryYearSeries(docs, 'actual'), [docs])
 
   if (docs.length < 2) {
     return (
@@ -64,6 +69,21 @@ export default function YearsTab({ docs, onLoadYear, knownYears, activeYear }) {
             </div>
           )
         })}
+      </div>
+
+      <div className="panel">
+        <h2>Where the money went, year by year — actual</h2>
+        <p className="small muted" style={{ marginTop: -6 }}>
+          One bar per year, split by category. Hover a bar for the total and what makes it up.
+          {byCategory.expense.some((s) => s.slot < 0) && (
+            <> The smallest categories are grouped into <strong>Other</strong> so the colours stay
+            distinguishable; the table below keeps every line separate.</>
+          )}
+        </p>
+        <CategoryChart
+          rows={byCategory.rows} income={byCategory.income} expense={byCategory.expense}
+          ink={INK} theme={theme} xKey="year" height={320} showTotals
+        />
       </div>
 
       <div className="panel">

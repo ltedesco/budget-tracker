@@ -7,7 +7,7 @@
 // the structure later and the years still compare on what they have in common.
 
 import { emptyData, nowISO, sumMonths } from './model.js'
-import { summaryFor } from './summary.js'
+import { breakdown, categoryMonths, summaryFor } from './summary.js'
 
 export const SEED_MODES = ['actual', 'planned', 'blank']
 
@@ -119,4 +119,37 @@ export function yearTotals(docs, kind) {
       actual: kind === 'income' ? a.totals.income : a.totals.expenses,
     }
   })
+}
+
+/**
+ * The per-category breakdown across years: one row per year, one key per
+ * category, shaped exactly like the monthly version so the same chart draws
+ * both.
+ *
+ * Categories are matched by id, which is what rollover preserves — so a
+ * category renamed between years still lines up, and its band keeps its
+ * colour. The name shown is the most recent year's, since that is the one the
+ * reader is currently using.
+ */
+export function categoryYearSeries(docs, layer, only = null) {
+  const ordered = [...docs].sort((a, b) => a.year - b.year)
+  const latest = ordered[ordered.length - 1]
+  if (!latest) return { rows: [], income: [], expense: [] }
+
+  const { income, expense } = breakdown(latest, layer, only)
+
+  const rows = ordered.map((doc) => {
+    const row = { year: String(doc.year), incomeTotal: 0, expenseTotal: 0 }
+    for (const [list, key] of [[income, 'incomeTotal'], [expense, 'expenseTotal']]) {
+      for (const s of list) {
+        const ids = s.folds || [s.id]
+        const total = ids.reduce((sum, id) => sum + sumMonths(categoryMonths(doc, id, layer)), 0)
+        row[s.id] = total
+        row[key] += total
+      }
+    }
+    return row
+  })
+
+  return { rows, income, expense }
 }

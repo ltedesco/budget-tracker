@@ -170,6 +170,150 @@ export function resolveSelection(data, ids) {
   return new Set(kept)
 }
 
+// --- per-category breakdown --------------------------------------------------
+
+/** The most series a stacked bar can carry before the hues run out. */
+export const MAX_SERIES = 8
+export const OTHER_ID = '__other__'
+
+/**
+ * Which categories get their own band in a stack, and which colour slot each
+ * one prefers.
+ *
+ * The preferred slot comes from the category's own position within its kind,
+ * never from its size or its position among the selected. That is what keeps
+ * Groceries the same colour when Travel is unticked: colour follows the
+ * category, so unticking one never repaints the rest.
+ *
+ * Income counts down from the top of the palette and expenses up from the
+ * bottom, so the two stacks standing side by side do not open with the same
+ * hue. Where they still meet in the middle, `assignSlots` separates them.
+ *
+ * Past eight bands the hues would have to repeat, so the smallest are folded
+ * into a single "Other" rather than cycled — an eighth and a sixteenth series
+ * sharing a colour is worse than not splitting them out.
+ */
+export function seriesFor(data, kind, layer, only = null, budget = MAX_SERIES) {
+  // The slot is taken before filtering, from the category's position among all
+  // of its kind. Taking it afterwards would number the survivors 0,1,2… and
+  // repaint the whole chart every time one was unticked.
+  const withTotals = categoriesOf(data, kind)
+    .map((c, i) => ({
+      id: c.id,
+      name: c.name,
+      kind,
+      slot: kind === 'income' ? MAX_SERIES - 1 - (i % MAX_SERIES) : i % MAX_SERIES,
+      total: sumMonths(categoryMonths(data, c.id, layer)),
+    }))
+    .filter((c) => !only || only.has(c.id))
+
+  if (withTotals.length <= budget) return withTotals
+
+  const ranked = [...withTotals].sort((a, b) => b.total - a.total)
+  const kept = new Set(ranked.slice(0, Math.max(0, budget - 1)).map((c) => c.id))
+  const folded = withTotals.filter((c) => !kept.has(c.id))
+  return [
+    ...withTotals.filter((c) => kept.has(c.id)),
+    {
+      id: `${OTHER_ID}:${kind}`,
+      name: `Other (${folded.length})`,
+      kind,
+      slot: -1,
+      total: folded.reduce((sum, c) => sum + c.total, 0),
+      // Ids, not names: two categories may legitimately share a name, and
+      // matching on it would fold the wrong one.
+      folds: folded.map((c) => c.id),
+    },
+  ]
+}
+
+/**
+ * Give every visible band a colour nobody else is using.
+ *
+ * Preferred slots wrap at eight, so two visible categories sixteen apart — or
+ * an income and an expense meeting in the middle — can ask for the same hue.
+ * Two bands the same colour on one chart is a worse failure than a band moving
+ * colour, so a clash is resolved by moving the later one to the next free slot.
+ * Everything that does not clash keeps the slot it asked for, which is the
+ * common case and the one that has to stay stable.
+ */
+export function assignSlots(income, expense) {
+  const taken = new Set()
+  const place = (s) => {
+    if (s.slot < 0) return s // Other stays neutral and never takes a hue.
+    let slot = s.slot
+    for (let step = 0; step < MAX_SERIES && taken.has(slot); step++) {
+      slot = (slot + 1) % MAX_SERIES
+    }
+    taken.add(slot)
+    return { ...s, slot }
+  }
+  // Expenses first: they are the many, and the ones a reader tracks between
+  // views. Income yields the slot when the two want the same hue.
+  const nextExpense = expense.map(place)
+  const nextIncome = income.map(place)
+  return { income: nextIncome, expense: nextExpense }
+}
+
+/**
+ * Both stacks, filtered, folded and coloured — what a chart needs.
+ *
+ * The eight hues are shared between the two stacks, not eight each: two bands
+ * the same colour are just as confusing standing in different stacks as in the
+ * same one. So the budget is split before either is folded. Income takes only
+ * what it needs, up to half, and expenses take the rest — a budget usually has
+ * two or three ways in and a dozen ways out, and it is the ways out that
+ * deserve the bands.
+ */
+export function breakdown(data, layer, only = null) {
+  const incomeCount = categoriesOf(data, 'income').filter((c) => !only || only.has(c.id)).length
+  const expenseCount = categoriesOf(data, 'expense').filter((c) => !only || only.has(c.id)).length
+
+  let incomeBudget = incomeCount
+  let expenseBudget = expenseCount
+  if (incomeCount + expenseCount > MAX_SERIES) {
+    incomeBudget = Math.min(incomeCount, Math.max(1, Math.floor(MAX_SERIES / 2)))
+    expenseBudget = MAX_SERIES - incomeBudget
+  }
+
+  return assignSlots(
+    seriesFor(data, 'income', layer, only, incomeBudget),
+    seriesFor(data, 'expense', layer, only, expenseBudget),
+  )
+}
+
+/**
+ * Chart rows with one key per series, plus each stack's total so a tooltip can
+ * report it without re-adding the parts.
+ */
+export function categorySeries(data, layer, only = null) {
+  const { income, expense } = breakdown(data, layer, only)
+  const months = new Map()
+
+  for (const s of [...income, ...expense]) {
+    const ids = s.folds || [s.id]
+    const totals = zeros()
+    for (const id of ids) {
+      const m = categoryMonths(data, id, layer)
+      for (let i = 0; i < 12; i++) totals[i] += m[i]
+    }
+    months.set(s.id, totals)
+  }
+
+  return MONTHS.map((label, i) => {
+    const row = { month: label, incomeTotal: 0, expenseTotal: 0 }
+    for (const s of income) {
+      row[s.id] = months.get(s.id)[i]
+      row.incomeTotal += row[s.id]
+    }
+    for (const s of expense) {
+      row[s.id] = months.get(s.id)[i]
+      row.expenseTotal += row[s.id]
+    }
+    return row
+  })
+}
+
 // --- export -----------------------------------------------------------------
 
 const csvCell = (v) => {

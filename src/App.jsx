@@ -555,6 +555,7 @@ export default function App() {
   // Kept in prefs so a chosen view survives a reload. Per device, not synced:
   // which categories you are looking at is not part of the budget.
   const setChartFilter = useCallback((ids) => setPrefs((p) => ({ ...p, chartFilter: ids })), [])
+  const setChartMode = useCallback((mode) => setPrefs((p) => ({ ...p, chartMode: mode })), [])
 
   const syncLabel = !sync.tokenEnc && !token
     ? 'Sync off'
@@ -648,6 +649,8 @@ export default function App() {
           onGoToBackup={() => setTab('data')}
           chartFilter={prefs.chartFilter || []}
           onChartFilter={setChartFilter}
+          chartMode={prefs.chartMode}
+          onChartMode={setChartMode}
         />
       )}
 
@@ -671,6 +674,7 @@ export default function App() {
           docs={[...new Set([...years, year])].sort((a, b) => a - b).map((y) => (y === year ? data : loadLocal(y))).filter((doc) => doc.items.length)}
           knownYears={years}
           activeYear={year}
+          theme={resolvedTheme}
           onLoadYear={actions.switchYear}
         />
       )}

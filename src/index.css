@@ -326,3 +326,26 @@ th.derived { text-align: right; }
 }
 .cat-filter-row:hover { background: var(--bg); }
 .cat-filter-row input { width: auto; margin: 0; flex: none; }
+
+.chart-tip {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 11px; font-size: 13px; color: var(--text);
+  box-shadow: 0 6px 20px var(--shadow); min-width: 190px; max-width: 280px;
+}
+.chart-tip-head { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.chart-tip-section + .chart-tip-section { margin-top: 8px; }
+.chart-tip-total {
+  display: flex; justify-content: space-between; gap: 14px;
+  border-bottom: 1px solid var(--line); padding-bottom: 3px; margin-bottom: 3px;
+}
+.chart-tip-row { display: flex; align-items: center; gap: 7px; padding: 1px 0; }
+.chart-tip-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.chart-tip-name { flex: 1 1 auto; color: var(--muted); }
+.chart-tip-value { font-variant-numeric: tabular-nums; }
+.chart-tip-net {
+  display: flex; justify-content: space-between; gap: 14px;
+  margin-top: 8px; padding-top: 5px; border-top: 1px solid var(--line);
+}
+
+.chart-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.chart-controls .cat-filter { margin: 0; }

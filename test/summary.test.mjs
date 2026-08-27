@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { emptyData, makeCategory, makeItem, sumMonths } from '../src/lib/model.js'
 import {
   summaryFor, variance, average, monthsWithActuals, rollup, budgetCSV, chartSeries,
-  kindMonths, resolveSelection,
+  kindMonths, resolveSelection, seriesFor, categorySeries, breakdown, MAX_SERIES,
 } from '../src/lib/summary.js'
 
 const BORN = '2026-01-01T00:00:00.000Z'
@@ -182,4 +182,133 @@ test('ids of deleted categories are dropped rather than blanking the chart', () 
 test('a selection of only dead ids falls back to showing everything', () => {
   // Better than an empty chart with no explanation: the filter is simply gone.
   assert.equal(resolveSelection(fixture(), ['gone-1', 'gone-2']), null)
+})
+
+// --- per-category breakdown --------------------------------------------------
+
+/** A budget with `n` expense categories, each holding one item. */
+function wide(n) {
+  const d = emptyData(2026)
+  const inc = makeCategory({ kind: 'income', name: 'Wages', order: 0 }, BORN)
+  d.categories.push(inc)
+  d.items.push(makeItem({ categoryId: inc.id, name: 'Salary', order: 0, planned: Array(12).fill(9000) }, BORN))
+  for (let i = 0; i < n; i++) {
+    const c = makeCategory({ kind: 'expense', name: `Cat ${i}`, order: i }, BORN)
+    d.categories.push(c)
+    // Ascending totals, so the smallest are the ones folded away.
+    d.items.push(makeItem({ categoryId: c.id, name: `Item ${i}`, order: 0, planned: Array(12).fill(100 * (i + 1)) }, BORN))
+  }
+  return d
+}
+
+test('each category becomes its own series', () => {
+  const d = wide(3)
+  const series = seriesFor(d, 'expense', 'planned')
+  assert.deepEqual(series.map((s) => s.name), ['Cat 0', 'Cat 1', 'Cat 2'])
+  assert.deepEqual(series.map((s) => s.slot), [0, 1, 2])
+})
+
+test('a colour slot follows the category, not what else is selected', () => {
+  const d = wide(4)
+  const third = d.categories.find((c) => c.name === 'Cat 2')
+  const all = seriesFor(d, 'expense', 'planned')
+  const some = seriesFor(d, 'expense', 'planned', new Set([third.id]))
+  // Unticking the earlier categories must not repaint this one.
+  assert.equal(all.find((s) => s.name === 'Cat 2').slot, 2)
+  assert.equal(some[0].slot, 2, 'the slot is the position in the budget, not in the selection')
+})
+
+test('past eight categories the smallest fold into one Other band', () => {
+  const d = wide(12)
+  const series = seriesFor(d, 'expense', 'planned')
+  assert.equal(series.length, MAX_SERIES, 'never more bands than there are hues')
+  const other = series[series.length - 1]
+  assert.match(other.name, /^Other \(5\)$/)
+  assert.equal(other.slot, -1, 'Other is neutral, not a ninth hue')
+  // The five smallest (100..500 a month) are the ones folded.
+  assert.equal(other.total, (100 + 200 + 300 + 400 + 500) * 12)
+})
+
+test('folding keeps every dollar — the bands still sum to the whole', () => {
+  const d = wide(12)
+  const series = seriesFor(d, 'expense', 'planned')
+  const banded = series.reduce((sum, s) => sum + s.total, 0)
+  const whole = sumMonths(kindMonths(d, 'expense', 'planned'))
+  assert.equal(banded, whole)
+})
+
+test('exactly eight categories are not folded', () => {
+  const series = seriesFor(wide(8), 'expense', 'planned')
+  assert.equal(series.length, 8)
+  assert.ok(!series.some((s) => s.slot < 0), 'nothing should be folded at the cap')
+})
+
+test('chart rows carry a key per series plus each stack total', () => {
+  const d = wide(3)
+  const rows = categorySeries(d, 'planned')
+  const expense = seriesFor(d, 'expense', 'planned')
+  assert.equal(rows.length, 12)
+  const jan = rows[0]
+  assert.equal(jan.expenseTotal, 100 + 200 + 300)
+  assert.equal(jan.incomeTotal, 9000)
+  for (const s of expense) assert.ok(s.id in jan, `${s.name} needs its own key`)
+})
+
+test('the stack total always equals the bands drawn in it', () => {
+  const d = wide(12)
+  const rows = categorySeries(d, 'planned')
+  const series = seriesFor(d, 'expense', 'planned')
+  // The tooltip reports expenseTotal; it must not disagree with the picture.
+  for (const row of rows) {
+    const drawn = series.reduce((sum, s) => sum + (row[s.id] || 0), 0)
+    assert.equal(row.expenseTotal, drawn)
+  }
+})
+
+test('the breakdown respects the category filter', () => {
+  const d = wide(5)
+  const pick = d.categories.filter((c) => c.name === 'Cat 1' || c.name === 'Cat 3')
+  const only = new Set(pick.map((c) => c.id))
+  const series = seriesFor(d, 'expense', 'planned', only)
+  assert.deepEqual(series.map((s) => s.name), ['Cat 1', 'Cat 3'])
+  assert.equal(categorySeries(d, 'planned', only)[0].expenseTotal, 200 + 400)
+  assert.equal(categorySeries(d, 'planned', only)[0].incomeTotal, 0, 'no income category selected')
+})
+
+test('income and expenses are counted into separate stacks', () => {
+  // Never one stack: a salary added onto a grocery bill measures nothing.
+  const row = categorySeries(wide(2), 'planned')[0]
+  assert.equal(row.incomeTotal, 9000)
+  assert.equal(row.expenseTotal, 300)
+})
+
+test('no two visible bands share a colour, across both stacks', () => {
+  // Income counts down the palette and expenses up, so with enough of each
+  // they meet — and would otherwise both ask for the same hue.
+  const d = wide(9)
+  for (let i = 0; i < 5; i++) {
+    const c = makeCategory({ kind: 'income', name: `Inc ${i}`, order: i + 1 }, BORN)
+    d.categories.push(c)
+    d.items.push(makeItem({ categoryId: c.id, name: `Pay ${i}`, order: 0, planned: Array(12).fill(500) }, BORN))
+  }
+  const { income, expense } = breakdown(d, 'planned')
+  const slots = [...income, ...expense].map((s) => s.slot).filter((n) => n >= 0)
+  assert.equal(new Set(slots).size, slots.length, `duplicate colour slot in ${slots}`)
+})
+
+test('a band that clashes with nothing keeps the slot it asked for', () => {
+  const d = wide(3)
+  const { expense } = breakdown(d, 'planned')
+  assert.deepEqual(expense.map((s) => s.slot), [0, 1, 2])
+})
+
+test('filtering still does not repaint the bands that survive', () => {
+  const d = wide(4)
+  const keep = d.categories.filter((c) => c.name === 'Cat 1' || c.name === 'Cat 3')
+  const before = breakdown(d, 'planned')
+  const after = breakdown(d, 'planned', new Set(keep.map((c) => c.id)))
+  for (const s of after.expense) {
+    const was = before.expense.find((b) => b.id === s.id)
+    assert.equal(s.slot, was.slot, `${s.name} changed colour when the filter changed`)
+  }
 })
