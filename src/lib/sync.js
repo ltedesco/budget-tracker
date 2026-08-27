@@ -22,6 +22,16 @@ const defaultApi = { getFile: ghGetFile, putFile: ghPutFile }
 
 const isConflict = (e) => /\b409\b|does not match/.test(e?.message || '')
 
+/**
+ * Two documents for different years must never merge. On a path with no
+ * {year} in it every year resolves to the same file, so pushing a rolled-over
+ * year would merge next year's plan into this year's document — same ids, same
+ * row counts, so the loss guard sees nothing, while this year's actuals are
+ * quietly overwritten. That is a misconfiguration, not a judgement call, so it
+ * is refused outright rather than offered as a choice.
+ */
+const yearMismatch = (local, remote) => remote.year !== local.year
+
 /** Parse the remote file, or null when it does not exist yet. */
 function parseRemote(content) {
   if (content === null) return null
@@ -76,9 +86,12 @@ export async function pullMerged(config, local, api = defaultApi, options = {}) 
   const { content, sha } = await api.getFile(config)
   const remote = parseRemote(content)
   if (!remote) return { merged: local, sha: null, existed: false }
+  if (yearMismatch(local, remote)) {
+    return { merged: local, sha, existed: true, blocked: 'year', remoteYear: remote.year }
+  }
   const merged = mergeData(local, remote)
   const losses = options.allowDestructive ? [] : mergeLosses(local, merged)
-  if (losses.length) return { merged, sha, existed: true, blocked: true, losses }
+  if (losses.length) return { merged, sha, existed: true, blocked: 'losses', losses }
   return { merged, sha, existed: true }
 }
 
@@ -93,12 +106,15 @@ export async function pushMerged(config, local, api = defaultApi, options = {}) 
   for (let i = 0; i < attempts; i++) {
     const { content, sha } = await api.getFile(config)
     const remote = parseRemote(content)
+    if (remote && yearMismatch(local, remote)) {
+      return { merged: local, blocked: 'year', remoteYear: remote.year }
+    }
     const merged = remote ? mergeData(local, remote) : local
 
     // Before the write, not after: once putFile returns, the remote already
     // holds the merge and reporting it would be an autopsy.
     const losses = allowDestructive ? [] : mergeLosses(local, merged)
-    if (losses.length) return { merged, blocked: true, losses }
+    if (losses.length) return { merged, blocked: 'losses', losses }
 
     try {
       const put = await api.putFile(config, serialize(merged), sha, 'Update budget data')

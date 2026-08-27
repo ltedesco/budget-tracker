@@ -174,13 +174,13 @@ export default function App() {
     setSyncStatus({ busy: true, message: 'Pulling…', error: '' })
     try {
       const before = dataRef.current
-      const { merged, existed, blocked, losses } = await pullMerged(config, before)
+      const { merged, existed, blocked, losses, remoteYear } = await pullMerged(config, before)
       if (!existed) {
         setSyncStatus({ busy: false, message: 'No file there yet — push to create it.', error: '' })
         return
       }
       if (blocked) {
-        setPendingMerge({ kind: 'pull', merged, losses })
+        setPendingMerge({ kind: 'pull', reason: blocked, merged, losses, remoteYear })
         setSyncStatus({ busy: false, message: '', error: '' })
         return
       }
@@ -197,10 +197,10 @@ export default function App() {
     setSyncStatus({ busy: true, message: 'Pushing…', error: '' })
     try {
       // Merged, not local: the file may hold edits this device has never seen.
-      const { merged, blocked, losses } = await pushMerged(config, dataRef.current, undefined, options)
+      const { merged, blocked, losses, remoteYear } = await pushMerged(config, dataRef.current, undefined, options)
       if (blocked) {
         // Nothing was written. The decision comes first.
-        setPendingMerge({ kind: 'push', merged, losses })
+        setPendingMerge({ kind: 'push', reason: blocked, merged, losses, remoteYear })
         setSyncStatus({ busy: false, message: '', error: '' })
         return
       }
@@ -401,6 +401,13 @@ export default function App() {
       setSync: setSyncField,
 
       /**
+       * Move sync onto one file per year. Safe to run at any time: the years
+       * simply start writing to new paths, and whatever the old single file
+       * holds stays where it is as one more copy.
+       */
+      usePerYearPaths: () => setSyncField({ path: 'data/budget-{year}.json' }),
+
+      /**
        * Stamp this year as having a copy that is not on GitHub. Tracked per
        * year and per device, because that is what a backup file actually is —
        * one year, saved on one machine.
@@ -589,7 +596,38 @@ export default function App() {
         />
       )}
 
-      {pendingMerge && (
+      {pendingMerge?.reason === 'year' && (
+        <Modal
+          title="That file holds a different year"
+          subtitle="Nothing has been read or written. This one is a settings problem, not a judgement call."
+          onClose={() => setPendingMerge(null)}
+        >
+          <p className="small">
+            {year} is open here, but <code>{pathForYear(sync.path, year)}</code> on GitHub holds{' '}
+            <strong>{pendingMerge.remoteYear}</strong>. Your sync path has no{' '}
+            <code>{'{year}'}</code> in it, so every year resolves to the same file — and merging two
+            years into one would overwrite {pendingMerge.remoteYear}'s figures with {year}'s while
+            still calling them {pendingMerge.remoteYear}. Row counts would not change, so nothing
+            else would notice.
+          </p>
+          <p className="small muted">
+            Switching to one file per year fixes it for good. Nothing is lost: each year starts
+            writing to its own path, and the existing file stays exactly as it is — one more copy
+            of {pendingMerge.remoteYear}.
+          </p>
+          <div className="row" style={{ marginTop: 12, gap: 10 }}>
+            <button
+              className="primary"
+              onClick={() => { actions.usePerYearPaths(); setPendingMerge(null) }}
+            >
+              Use one file per year
+            </button>
+            <button onClick={() => setPendingMerge(null)}>Leave it for now</button>
+          </div>
+        </Modal>
+      )}
+
+      {pendingMerge?.reason === 'losses' && (
         <Modal
           title="This sync would remove data"
           subtitle={

@@ -4,7 +4,7 @@ import StatementImport from './StatementImport.jsx'
 import { copyText, downloadFile, money } from '../lib/format.js'
 import { configErrors } from '../lib/github.js'
 import RestorePanel from './RestorePanel.jsx'
-import { pathForYear } from '../lib/storage.js'
+import { isSingleYearPath, pathForYear } from '../lib/storage.js'
 import { backupFilename, backupMessage, backupText } from '../lib/backup.js'
 import { budgetCSV } from '../lib/summary.js'
 import { validateData } from '../lib/model.js'
@@ -206,6 +206,22 @@ export default function DataTab({ data, sync, token, syncStatus, actions, backup
               onChange={(e) => actions.setSync({ path: e.target.value.trim() })} />
           </label>
         </div>
+
+        {/* Said before the second year exists, not after. By the time a push
+            is refused the roll-over has already happened and the fix feels
+            like an obstacle rather than a setting. */}
+        {isSingleYearPath(sync.path) && (
+          <p className="note err" style={{ marginTop: 10 }}>
+            <strong>This path has no <code>{'{year}'}</code> in it,</strong> so every year would
+            sync to the same file. That is fine while {data.year} is the only year, but the moment
+            a second one exists the two would be merged into one document — same rows, same
+            counts, one year's figures written over the other's. Syncing refuses to do it, so
+            nothing can break silently, but the fix is worth making now.{' '}
+            <button className="link" onClick={actions.usePerYearPaths}>
+              Use one file per year
+            </button>
+          </p>
+        )}
 
         <div className="token-box" style={{ marginTop: 12 }}>
           {!hasSaved && !token && (

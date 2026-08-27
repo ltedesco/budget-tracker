@@ -81,7 +81,7 @@ test('a destructive push is blocked BEFORE anything is written', async () => {
     putFile: async () => { wrote = true; return { sha: 's', commit: 'c' } },
   }
   const out = await pushMerged(cfg, local, spying)
-  assert.equal(out.blocked, true)
+  assert.equal(out.blocked, 'losses')
   assert.equal(wrote, false, 'the file must not be written before the user decides')
   assert.equal(out.losses[0].lost, 8)
 })
@@ -115,7 +115,7 @@ test('creating the file for the first time is never blocked', async () => {
 test('a destructive pull is reported instead of adopted', async () => {
   const local = doc(20, 500)
   const out = await pullMerged(cfg, local, api(withDeletes(local, local.items.slice(0, 10).map((i) => i.id))))
-  assert.equal(out.blocked, true)
+  assert.equal(out.blocked, 'losses')
   assert.equal(out.losses[0].label, '10 line items')
   // The merged document still comes back, so the dialog can offer to take it.
   assert.equal(out.merged.items.length, 10)
@@ -187,4 +187,59 @@ test('losing every one of a kind is named even below the floor', () => {
 
 test('emptying the ledger entirely is named however short it was', () => {
   assert.deepEqual(mergeLosses(doc(10, 2), doc(10, 0)).map((l) => l.key), ['transactions'])
+})
+
+// --- the year guard ---
+// A legacy path with no {year} resolves every year to the same file. Merging
+// two years into one document changes no row counts at all, so the loss guard
+// is blind to it — this is the guard that catches it.
+
+test('pushing one year over another is refused, and nothing is written', async () => {
+  const local = { ...doc(10, 50, 2027), year: 2027 }
+  const remote = { ...doc(10, 50, 2026), year: 2026 }
+  let wrote = false
+  const spying = { ...api(remote), putFile: async () => { wrote = true; return { sha: 's', commit: 'c' } } }
+  const out = await pushMerged(cfg, local, spying)
+  assert.equal(out.blocked, 'year')
+  assert.equal(out.remoteYear, 2026)
+  assert.equal(wrote, false)
+  assert.equal(out.merged.year, 2027, 'local must come back untouched')
+})
+
+test('the year guard cannot be waved through like a row loss', async () => {
+  const local = { ...doc(10, 50, 2027), year: 2027 }
+  const out = await pushMerged(cfg, local, api({ ...doc(10, 50, 2026), year: 2026 }), { allowDestructive: true })
+  assert.equal(out.blocked, 'year', 'a mismatched year is a misconfiguration, not a choice')
+})
+
+test('pulling a different year is refused too', async () => {
+  const out = await pullMerged(cfg, { ...doc(5, 5, 2027), year: 2027 }, api({ ...doc(5, 5, 2026), year: 2026 }))
+  assert.equal(out.blocked, 'year')
+  assert.equal(out.merged.year, 2027)
+})
+
+test('the same year syncs normally, legacy path or not', async () => {
+  const out = await pushMerged(cfg, doc(10, 50, 2026), api(doc(10, 50, 2026)))
+  assert.equal(out.blocked, undefined)
+})
+
+test('creating a year that has no file yet is not a mismatch', async () => {
+  const out = await pushMerged(cfg, doc(10, 50, 2027), api(null))
+  assert.equal(out.blocked, undefined)
+})
+
+test('a row loss still reports as a row loss, not a year problem', async () => {
+  const local = doc(20, 500)
+  const out = await pushMerged(cfg, local, api(withDeletes(local, local.items.slice(0, 8).map((i) => i.id))))
+  assert.equal(out.blocked, 'losses')
+})
+
+test('the merge that would have destroyed 2026 is exactly what is blocked', async () => {
+  // The real shape: 2027 rolled over from 2026 keeps every id, so counts match
+  // and only the values differ. Proof the loss guard alone would miss it.
+  const y2026 = doc(10, 50, 2026)
+  const y2027 = { ...doc(10, 50, 2027), year: 2027 }
+  assert.deepEqual(mergeLosses(y2027, y2026), [], 'counts are identical — nothing to count')
+  const out = await pushMerged(cfg, y2027, api(y2026))
+  assert.equal(out.blocked, 'year')
 })
