@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parse1099, payersIn, summarize1099, SOURCE_1099 } from '../src/lib/tracker1099.js'
 import { applySummary } from '../src/lib/statement.js'
+import { explainMissing } from '../src/lib/github.js'
 import { emptyData, makeCategory, makeItem } from '../src/lib/model.js'
 
 const file = (income) => JSON.stringify({ income, expenses: [], tags: [], deleted: [] })
@@ -168,4 +169,40 @@ test('months the tracker says nothing about are left alone', () => {
   const next = applySummary(d, summarize1099(entries, { year: 2026, itemId: 'item-1099' }),
     '2026-08-27T00:00:00Z', SOURCE_1099)
   assert.equal(next.items[0].actual[11], 5000, 'December was never the tracker\'s to touch')
+})
+
+// --- telling "no file" apart from "no access" -------------------------------
+// A 404 from the Contents API means either, and GitHub will not say which —
+// that ambiguity is deliberate, so a token cannot probe for private repos.
+// Reporting the wrong one sends someone hunting for a correct path.
+
+const cfg1099 = { owner: 'ltedesco', repo: '1099-data', branch: 'main', path: 'data/tracker-data.json', token: 't' }
+const stub = (responder) => { globalThis.fetch = async (url, opts) => responder(url, opts) }
+const res = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+
+test('a token that cannot see the repo is told so, not told the path is wrong', async () => {
+  stub((url) => (url.includes('/contents/') ? res(404, { message: 'Not Found' })
+    : res(404, { message: 'Not Found' })))
+  const message = await explainMissing(cfg1099)
+  assert.match(message, /cannot see ltedesco\/1099-data/)
+  assert.match(message, /Repository access/)
+  assert.doesNotMatch(message, /no data\/tracker-data\.json/)
+})
+
+test('a visible repo with a genuinely missing file names the path and branch', async () => {
+  stub((url) => (url.includes('/contents/') ? res(404, { message: 'Not Found' })
+    : res(200, { full_name: 'ltedesco/1099-data' })))
+  const message = await explainMissing(cfg1099)
+  assert.match(message, /is reachable/)
+  assert.match(message, /data\/tracker-data\.json on main/)
+})
+
+test('a 403 on the repo also reads as no access', async () => {
+  stub(() => res(403, { message: 'Resource not accessible by personal access token' }))
+  assert.match(await explainMissing(cfg1099), /cannot see/)
+})
+
+test('a bad token surfaces as itself rather than as a scope problem', async () => {
+  stub(() => res(401, { message: 'Bad credentials' }))
+  assert.match(await explainMissing(cfg1099), /401/)
 })

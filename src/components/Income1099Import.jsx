@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { getFile } from '../lib/github.js'
+import { explainMissing, getFile } from '../lib/github.js'
 import { money } from '../lib/format.js'
 import { MONTHS } from '../lib/model.js'
 import { categoriesOf, itemsOf } from '../lib/summary.js'
@@ -35,7 +35,8 @@ export default function Income1099Import({ data, sync, token, actions }) {
     try {
       const { content } = await getFile({ ...cfg, token })
       if (content === null) {
-        setError(`No file at ${cfg.path} in ${cfg.owner}/${cfg.repo} on ${cfg.branch || 'main'}.`)
+        // Never guess between "no file" and "no access" — ask.
+        setError(await explainMissing({ ...cfg, token }))
         return
       }
       const parsed = parse1099(content)
@@ -43,11 +44,7 @@ export default function Income1099Import({ data, sync, token, actions }) {
       setEntries(parsed.entries)
       if (!parsed.entries.length) setError('That file has no dated income entries.')
     } catch (e) {
-      setError(
-        /\b404\b/.test(e.message)
-          ? `${e.message} — a token scoped only to the budget repo cannot read ${cfg.owner}/${cfg.repo}.`
-          : e.message,
-      )
+      setError(/\b40[34]\b/.test(e.message) ? await explainMissing({ ...cfg, token }) : e.message)
     } finally {
       setBusy(false)
     }

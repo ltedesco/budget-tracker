@@ -50,6 +50,46 @@ async function fail(res) {
 }
 
 /**
+ * Whether the token can see the repository at all.
+ *
+ * A 404 from the Contents API means "no such file" OR "no such repo, as far as
+ * this token is concerned" — GitHub deliberately does not distinguish them, so
+ * that a token cannot be used to probe for private repositories. For a file the
+ * app expects to create that ambiguity is harmless. For a read-only source it
+ * is not: reporting "no file there" when the real cause is an unscoped token
+ * sends someone hunting for a path that was correct all along.
+ */
+export async function repoVisible(config) {
+  const { owner, repo, token } = config
+  const res = await fetch(`${API}/repos/${owner}/${repo}`, { headers: headers(token) })
+  if (res.ok) return true
+  if (res.status === 404 || res.status === 403) return false
+  await fail(res)
+  return false
+}
+
+/**
+ * Explain a 404 truthfully by asking a second question the first answer could
+ * not settle: is the repository visible to this token?
+ */
+export async function explainMissing(config) {
+  const { owner, repo, path, branch } = config
+  let visible
+  try {
+    visible = await repoVisible(config)
+  } catch (e) {
+    return e.message
+  }
+  if (!visible) {
+    return `This token cannot see ${owner}/${repo}. A fine-grained token only reaches the ` +
+      `repositories picked when it was created, and this one does not include ${repo}. ` +
+      `Add it under Repository access on the token, or use a token that covers both.`
+  }
+  return `${owner}/${repo} is reachable, but there is no ${path} on ${branch || 'main'}. ` +
+    'Check the path and the branch.'
+}
+
+/**
  * Read the data file. Returns { content, sha } — or { content: null, sha: null }
  * when the file does not exist yet, so a first push can create it.
  */
