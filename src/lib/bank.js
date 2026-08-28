@@ -266,7 +266,12 @@ export function summariseBank(rows, data, { year, existing = [], source = BANK_S
   for (const row of rows) {
     if (row.year !== Number(year)) { add(report.wrongYear, row.amount); continue }
 
-    const exclusion = excludedBy(row.desc)
+    // A rule you wrote is an explicit statement about your own money, so it
+    // beats a default exclusion. Without this, anything the app excludes by
+    // default could never be rescued: a brokerage transfer you do want counted
+    // as trading would be dropped before any rule could claim it.
+    const spec = matchBankRule(row.desc, rules)
+    const exclusion = spec ? null : excludedBy(row.desc)
     if (exclusion) {
       add(report.excluded.find((e) => e.key === exclusion.key), row.amount)
       continue
@@ -304,7 +309,6 @@ export function summariseBank(rows, data, { year, existing = [], source = BANK_S
     const income = row.amount > 0
     add(income ? report.income : report.spending, row.amount)
 
-    const spec = matchBankRule(row.desc, rules)
     const itemId = spec && resolve ? resolve(spec) : null
     if (!itemId) { add(report.unassigned, row.amount); continue }
     add(report.assigned, row.amount)

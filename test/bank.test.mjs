@@ -257,3 +257,31 @@ test('the side of the line decides, not the side of the bank row', () => {
   const s = run(csv(row('04/02/2026', 'CLAWBACK ADJUSTMENT', -300)), d)
   assert.equal(s.cells.get('i-pay:3'), -300, 'money out of an income line')
 })
+
+test('a rule you wrote beats a default exclusion', () => {
+  // Brokerage transfers are excluded by default, but someone who tracks their
+  // trading as a budget line has said otherwise and should be believed.
+  const d = budget()
+  const trade = makeItem({ categoryId: 'c-exp', name: 'Stock Trading', order: 1 }); trade.id = 'i-trade'
+  d.items.push(trade)
+  assert.equal(excludedBy('ROBINHOOD DEBITS')?.key, 'brokerage', 'still excluded by default')
+
+  const without = run(csv(row('05/05/2026', 'ROBINHOOD DEBITS', -34.04)), d)
+  assert.equal(without.transactions.length, 0)
+
+  d.bankRules = [{ match: 'robinhood', target: 'Debt::Stock Trading' }]
+  const withRule = run(csv(row('05/05/2026', 'ROBINHOOD DEBITS', -34.04)), d)
+  assert.equal(withRule.transactions.length, 1)
+  assert.equal(withRule.cells.get('i-trade:4'), 34.04)
+})
+
+test('rescuing one exclusion does not rescue the rest', () => {
+  const d = budget()
+  d.bankRules = [{ match: 'robinhood', target: 'Debt::Student loans' }]
+  const s = run(csv(
+    row('05/05/2026', 'ROBINHOOD DEBITS', -34.04),
+    row('05/06/2026', 'AMERICAN EXPRESS ACH PMT', -4000),
+  ), d)
+  assert.equal(s.transactions.length, 1)
+  assert.equal(bucket(s.report, 'card').amount, 4000, 'card payments stay excluded')
+})
