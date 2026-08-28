@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import Modal from './Modal.jsx'
 import StatementImport from './StatementImport.jsx'
+import Income1099Import from './Income1099Import.jsx'
 import { copyText, downloadFile, money } from '../lib/format.js'
 import { configErrors } from '../lib/github.js'
 import RestorePanel from './RestorePanel.jsx'
@@ -183,6 +184,8 @@ export default function DataTab({ data, sync, token, syncStatus, actions, backup
       </div>
 
       <StatementImport data={data} onApply={actions.applyStatement} onPrepare={actions.prepareForStatement} />
+
+      <Income1099Import data={data} sync={sync} token={token} actions={actions} />
 
       <div className="panel">
         <h2>App lock</h2>

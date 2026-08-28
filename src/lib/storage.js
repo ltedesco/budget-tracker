@@ -147,6 +147,16 @@ export const defaultSyncConfig = () => ({
   // Only the encrypted envelope is persisted; the token itself never is.
   tokenEnc: null,
   autoPush: false,
+  // Where the 1099 tracker keeps its data, and which budget line its payments
+  // belong to. Read-only: this app never writes to that repo.
+  income1099: {
+    owner: '',
+    repo: '',
+    branch: 'main',
+    path: 'data/tracker-data.json',
+    itemId: '',
+    payers: [],
+  },
 })
 
 export function loadSyncConfig() {
@@ -154,7 +164,10 @@ export function loadSyncConfig() {
     const raw = localStorage.getItem(SYNC_KEY)
     if (!raw) return defaultSyncConfig()
     const { token, ...saved } = JSON.parse(raw)
-    return { ...defaultSyncConfig(), ...saved }
+    const base = defaultSyncConfig()
+    // Merged one level down too, so a config saved before this block existed
+    // still comes back with every field present.
+    return { ...base, ...saved, income1099: { ...base.income1099, ...(saved.income1099 || {}) } }
   } catch {
     return defaultSyncConfig()
   }

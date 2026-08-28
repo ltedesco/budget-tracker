@@ -15,8 +15,9 @@ import { rollover } from './lib/years.js'
 import { money } from './lib/format.js'
 import { applyTheme, resolveTheme, THEMES } from './lib/theme.js'
 import { itemsOf } from './lib/summary.js'
-import { ensureCatchAll } from './lib/statement.js'
+import { applySummary, ensureCatchAll } from './lib/statement.js'
 import { addTransaction, removeTransaction } from './lib/ledger.js'
+import { SOURCE_1099 } from './lib/tracker1099.js'
 import { pullMerged, pushMerged } from './lib/sync.js'
 import { backupState, recordBackup } from './lib/backup.js'
 import * as vault from './lib/vault.js'
@@ -382,6 +383,21 @@ export default function App() {
           next,
           `Recorded ${plural(cells, 'monthly total', 'monthly totals')} from ${filename}` +
             (swept ? `, ${money(swept)} of it unassigned.` : '.'),
+          true,
+        )
+      },
+
+      /**
+       * File the 1099 tracker's payments onto one income line. Goes through
+       * the same per-source apply as a card statement, so it replaces only
+       * what this source contributed and leaves every other share alone.
+       */
+      apply1099: (summary, item) => {
+        const next = applySummary(d(), summary, nowISO(), SOURCE_1099)
+        commit(
+          next,
+          `Filed ${plural(summary.totals.entries, 'payment', 'payments')} from the 1099 tracker ` +
+            `onto ${item.name} — ${money(summary.totals.amount)}.`,
           true,
         )
       },
