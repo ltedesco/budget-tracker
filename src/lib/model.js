@@ -68,6 +68,14 @@ export const emptyData = (year = currentYear()) => ({
   // up and checked against what it was actually made of. Totals remain the
   // authoritative numbers; this is the audit trail behind them.
   transactions: [],
+  // Which payee text maps to which line when a bank export is imported.
+  //
+  // These live in the document rather than in the app's code because they name
+  // your billers and your line items — a lender, a second property, a child's
+  // college fund. The app is published from a public repository; that is not
+  // somewhere any of it belongs.
+  bankRules: [],
+  bankRulesAt: '',
   deleted: [],
 })
 
@@ -241,6 +249,15 @@ export function validateData(raw) {
       year: Number.isFinite(year) && year > 1970 ? year : currentYear(),
       startingBalance: toCell(raw.startingBalance) ?? 0,
       startingBalanceAt: String(raw.startingBalanceAt ?? ''),
+      bankRules: Array.isArray(raw.bankRules)
+        ? raw.bankRules
+            .map((r) => ({
+              match: String(r?.match ?? '').slice(0, 200),
+              target: String(r?.target ?? '').slice(0, 120),
+            }))
+            .filter((r) => r.match && r.target.includes('::'))
+        : [],
+      bankRulesAt: String(raw.bankRulesAt ?? ''),
       categories,
       items,
       transactions,
@@ -433,6 +450,12 @@ export function mergeData(local, remote) {
       ? Math.max(local.startingBalance || 0, remote.startingBalance || 0)
       : (balanceFromLocal ? local : remote).startingBalance
 
+  // The rule list is edited as a whole, so it merges as a whole: the
+  // later-stamped side wins. Merging rules row by row would let two devices
+  // produce a list neither of them wrote.
+  const rulesFromLocal = (local.bankRulesAt || '') >= (remote.bankRulesAt || '')
+  const rulesSource = rulesFromLocal ? local : remote
+
   const mergedItems = mergeRows(local.items, remote.items, deleted, mergeItem)
 
   return {
@@ -443,6 +466,8 @@ export function mergeData(local, remote) {
     startingBalanceAt: balanceFromLocal
       ? local.startingBalanceAt || remote.startingBalanceAt
       : remote.startingBalanceAt,
+    bankRules: rulesSource.bankRules || [],
+    bankRulesAt: rulesSource.bankRulesAt || '',
     categories: mergeRows(local.categories, remote.categories, deleted, mergeCategory),
     items: mergedItems,
     transactions: mergeTransactions(

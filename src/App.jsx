@@ -18,6 +18,7 @@ import { itemsOf } from './lib/summary.js'
 import { applySummary, ensureCatchAll } from './lib/statement.js'
 import { addTransaction, removeTransaction } from './lib/ledger.js'
 import { SOURCE_1099 } from './lib/tracker1099.js'
+import { BANK_SOURCE } from './lib/bank.js'
 import { pullMerged, pushMerged } from './lib/sync.js'
 import { backupState, recordBackup } from './lib/backup.js'
 import * as vault from './lib/vault.js'
@@ -398,6 +399,29 @@ export default function App() {
           next,
           `Filed ${plural(summary.totals.entries, 'payment', 'payments')} from the 1099 tracker ` +
             `onto ${item.name} — ${money(summary.totals.amount)}.`,
+          true,
+        )
+      },
+
+      /** Rules live in the document, never in the published app. */
+      setBankRules: (rules) =>
+        commit({ ...d(), bankRules: rules, bankRulesAt: nowISO() },
+          `Saved ${plural(rules.length, 'bank rule', 'bank rules')}.`),
+
+      /**
+       * File a bank export. Same per-source apply as the cards, so a month can
+       * carry a bank share and a card share side by side without either
+       * overwriting the other.
+       */
+      applyBank: (summary, filename) => {
+        const next = applySummary(d(), summary, nowISO(), BANK_SOURCE)
+        const r = summary.report
+        const skipped = r.duplicates.rows + r.splits.rows
+        commit(
+          next,
+          `Imported ${plural(summary.transactions.length, 'transaction', 'transactions')} from ` +
+            `${filename}` +
+            (skipped ? `, skipping ${plural(skipped, 'row', 'rows')} already recorded.` : '.'),
           true,
         )
       },

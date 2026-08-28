@@ -20,7 +20,9 @@ import { readWorkbook, serialToISO } from './xlsx.js'
 // layout, find each field by matching the header text.
 
 const HEADER_PATTERNS = {
-  date: [/^date$/i, /transaction date/i, /^posted date/i],
+  // Chase writes "Posting Date"; without it header detection fails outright
+  // and a perfectly good export is rejected as unreadable.
+  date: [/^date$/i, /transaction date/i, /^post(ed|ing) date/i],
   description: [/^description$/i, /^merchant/i, /appears on your statement as/i, /extended details/i],
   amount: [/^amount$/i, /^debit$/i, /^debit amount/i],
   credit: [/^credit$/i, /^credit amount/i],
@@ -508,7 +510,7 @@ export function parseStatement(input) {
 }
 
 /** CSV text or workbook bytes, both to the same matrix shape. */
-function toMatrix(input) {
+export function toMatrix(input) {
   if (typeof input === 'string') {
     const parsed = Papa.parse(input.replace(/^\uFEFF/, '').trim(), {
       header: false,
