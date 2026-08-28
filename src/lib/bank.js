@@ -66,6 +66,14 @@ export const EXCLUSIONS = [
   },
 ]
 
+/** The bucket a rule of your own sends a row to when it says "ignore". */
+export const IGNORED = {
+  key: 'ruled-out',
+  label: 'Ignored by one of your rules',
+  why: 'you told the importer this is not budget spending',
+  test: /(?!)/, // never matches on its own; only a rule puts a row here
+}
+
 /** Which exclusion a description falls under, or null to keep it. */
 export function excludedBy(description) {
   const text = String(description || '')
@@ -80,6 +88,12 @@ export function excludedBy(description) {
 // unassigned is visible, wrong is not.
 
 export const TARGET_SEPARATOR = '::'
+
+// A rule may say "not budget spending" instead of naming a line. That belongs
+// in the document alongside the mappings: which of your deposits are a cheque
+// you paid yourself and which are income is not something the app can know,
+// and hard-coding a guess about it would be both wrong and public.
+export const IGNORE = 'ignore'
 
 /**
  * The only rules that ship with the app.
@@ -252,7 +266,7 @@ export function summariseBank(rows, data, { year, existing = [], source = BANK_S
   const transactions = []
   const seen = new Map()
   const report = {
-    excluded: EXCLUSIONS.map((e) => ({ ...e, rows: 0, amount: 0 })),
+    excluded: [...EXCLUSIONS, IGNORED].map((e) => ({ ...e, rows: 0, amount: 0 })),
     duplicates: { rows: 0, amount: 0, samples: [] },
     splits: { rows: 0, amount: 0, samples: [] },
     wrongYear: { rows: 0, amount: 0 },
@@ -271,7 +285,7 @@ export function summariseBank(rows, data, { year, existing = [], source = BANK_S
     // default could never be rescued: a brokerage transfer you do want counted
     // as trading would be dropped before any rule could claim it.
     const spec = matchBankRule(row.desc, rules)
-    const exclusion = spec ? null : excludedBy(row.desc)
+    const exclusion = spec === IGNORE ? IGNORED : spec ? null : excludedBy(row.desc)
     if (exclusion) {
       add(report.excluded.find((e) => e.key === exclusion.key), row.amount)
       continue
@@ -364,12 +378,14 @@ export function rulesFromText(text) {
     const match = line.slice(0, at).trim()
     const target = line.slice(at + 2).trim()
     if (!match) { errors.push(`Line ${i + 1}: no pattern before "=>".`); return }
-    if (!target.includes(TARGET_SEPARATOR)) {
-      errors.push(`Line ${i + 1}: "${target}" needs to name a category and a line, as Category::Item.`)
+    if (target.toLowerCase() !== IGNORE && !target.includes(TARGET_SEPARATOR)) {
+      errors.push(
+        `Line ${i + 1}: "${target}" needs to name a category and a line, as Category::Item — or "ignore".`,
+      )
       return
     }
     try { new RegExp(match, 'i') } catch { errors.push(`Line ${i + 1}: "${match}" is not a valid pattern.`); return }
-    rules.push({ match, target })
+    rules.push({ match, target: target.toLowerCase() === IGNORE ? IGNORE : target })
   })
   return { rules, errors }
 }

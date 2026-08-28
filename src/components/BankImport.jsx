@@ -85,9 +85,12 @@ export default function BankImport({ data, actions }) {
       {showRules && (
         <>
           <label className="field">
-            <span>One per line: <code>pattern =&gt; Category::Item</code></span>
+            <span>
+              One per line: <code>pattern =&gt; Category::Item</code>, or{' '}
+              <code>pattern =&gt; ignore</code> for anything that is not budget spending
+            </span>
             <textarea rows={7} value={rulesText} onChange={(e) => setRulesText(e.target.value)}
-              placeholder={'city water => Utilities::Water\nacme mortgage => Home::Primary mortgage'} />
+              placeholder={'city water => Utilities::Water\nacme mortgage => Home::Primary mortgage\n^check \\d => ignore'} />
           </label>
           <div className="row" style={{ marginTop: 8, gap: 10, alignItems: 'center' }}>
             <button onClick={saveRules}>Save rules</button>

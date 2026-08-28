@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   parseBank, summariseBank, excludedBy, matchBankRule, resolveBankTarget, rulesFor,
-  signedFor, BANK_SOURCE,
+  signedFor, rulesFromText, BANK_SOURCE,
 } from '../src/lib/bank.js'
 import { applySummary } from '../src/lib/statement.js'
 import { emptyData, makeCategory, makeItem } from '../src/lib/model.js'
@@ -284,4 +284,49 @@ test('rescuing one exclusion does not rescue the rest', () => {
   ), d)
   assert.equal(s.transactions.length, 1)
   assert.equal(bucket(s.report, 'card').amount, 4000, 'card payments stay excluded')
+})
+
+// --- ignoring things, on your own say-so -------------------------------------
+
+test('a rule can say "ignore" instead of naming a line', () => {
+  const d = budget()
+  d.bankRules = [{ match: '^check \\d', target: 'ignore' }]
+  const s = run(csv(
+    row('02/17/2026', 'CHECK 384', -900),
+    row('01/15/2026', 'LOAN SERVICER PPD STUDNTLOAN', -1200),
+  ), d)
+  assert.equal(s.transactions.length, 1, 'only the loan is imported')
+  assert.equal(bucket(s.report, 'ruled-out').rows, 1)
+  assert.equal(bucket(s.report, 'ruled-out').amount, 900)
+})
+
+test('ignored money is still counted and named, not lost', () => {
+  const d = budget()
+  d.bankRules = [{ match: 'remote online deposit', target: 'ignore' }]
+  const s = run(csv(row('03/12/2026', 'REMOTE ONLINE DEPOSIT # 1', 405)), d)
+  const b = bucket(s.report, 'ruled-out')
+  assert.equal(b.amount, 405)
+  assert.ok(b.why.length > 10, 'the reason travels with the number')
+  assert.equal(s.report.unassigned.rows, 0, 'ignored is not the same as unassigned')
+})
+
+test('"ignore" is accepted as a target, anything else still needs a line', () => {
+  assert.deepEqual(rulesFromText('foo => ignore').rules, [{ match: 'foo', target: 'ignore' }])
+  assert.deepEqual(rulesFromText('foo => IGNORE').rules, [{ match: 'foo', target: 'ignore' }])
+  assert.match(rulesFromText('foo => Groceries').errors[0], /Category::Item — or "ignore"/)
+})
+
+test('every row still lands in exactly one bucket once rules can ignore', () => {
+  const d = budget()
+  d.bankRules = [{ match: '^check \\d', target: 'ignore' }]
+  const s = run(csv(
+    row('01/09/2026', 'ACME CORP PAYROLL', 5000, 'ACH_CREDIT'),
+    row('01/10/2026', 'AMERICAN EXPRESS ACH PMT', -4000),
+    row('02/17/2026', 'CHECK 384', -900),
+    row('01/12/2026', 'MYSTERY MERCHANT', -80),
+  ), d)
+  const r = s.report
+  const total = r.excluded.reduce((a, e) => a + e.amount, 0)
+    + r.duplicates.amount + r.splits.amount + r.assigned.amount + r.unassigned.amount + r.wrongYear.amount
+  assert.equal(total, 5000 + 4000 + 900 + 80)
 })

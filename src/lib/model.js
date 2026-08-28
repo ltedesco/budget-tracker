@@ -255,7 +255,8 @@ export function validateData(raw) {
               match: String(r?.match ?? '').slice(0, 200),
               target: String(r?.target ?? '').slice(0, 120),
             }))
-            .filter((r) => r.match && r.target.includes('::'))
+            // "ignore" is a target too: it says the row is not budget spending.
+            .filter((r) => r.match && (r.target.includes('::') || r.target.toLowerCase() === 'ignore'))
         : [],
       bankRulesAt: String(raw.bankRulesAt ?? ''),
       categories,
