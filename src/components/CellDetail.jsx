@@ -5,6 +5,7 @@ import { money } from '../lib/format.js'
 import { ISSUER_LABELS } from '../lib/statement.js'
 import { isManual, MANUAL_SOURCE, monthOfISO } from '../lib/ledger.js'
 import { SOURCE_1099 } from '../lib/tracker1099.js'
+import { BANK_SOURCE } from '../lib/bank.js'
 
 const pad = (n) => String(n).padStart(2, '0')
 
@@ -13,6 +14,7 @@ const daysIn = (year, month) => new Date(Date.UTC(Number(year), month + 1, 0)).g
 
 const sourceLabel = (source) => {
   if (source === MANUAL_SOURCE) return 'Entered by hand'
+  if (source === BANK_SOURCE) return 'Bank account'
   const [issuer, account] = String(source || '').split(':')
   const name = ISSUER_LABELS[issuer] || issuer || 'Import'
   return account ? `${name} ···${account}` : name

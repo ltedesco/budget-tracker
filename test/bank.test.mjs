@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   parseBank, summariseBank, excludedBy, matchBankRule, resolveBankTarget, rulesFor,
-  signedFor, rulesFromText, BANK_SOURCE,
+  signedFor, rulesFromText, tidyDescription, BANK_SOURCE,
 } from '../src/lib/bank.js'
 import { applySummary } from '../src/lib/statement.js'
 import { emptyData, makeCategory, makeItem } from '../src/lib/model.js'
@@ -329,4 +329,38 @@ test('every row still lands in exactly one bucket once rules can ignore', () => 
   const total = r.excluded.reduce((a, e) => a + e.amount, 0)
     + r.duplicates.amount + r.splits.amount + r.assigned.amount + r.unassigned.amount + r.wrongYear.amount
   assert.equal(total, 5000 + 4000 + 900 + 80)
+})
+
+// --- cleaning the payee text -------------------------------------------------
+
+test('ACH plumbing is stripped, leaving the payee', () => {
+  assert.equal(
+    tidyDescription('ORIG CO NAME:NewYork 529 ACH  CO ENTRY DESCR:CONTRIB    SEC:WEB IND ID:000030654432004 ORIG ID:1146191650'),
+    'NewYork 529 ACH CONTRIB',
+  )
+  assert.equal(tidyDescription('LOAN SERVICER PPD STUDNTLOAN PPD ID: 9102001101'), 'LOAN SERVICER PPD STUDNTLOAN')
+  assert.equal(tidyDescription('T-MOBILE  PCS SVC   7974102   WEB ID: 0000450304'), 'T-MOBILE PCS SVC 7974102')
+})
+
+test('stripping the ID fields removes a whole class of false match', () => {
+  // A rule of "529" for a college fund used to match the digits inside
+  // "WEB ID: 2455293997" on an unrelated purchase. The digits are gone before
+  // any rule sees the text.
+  const noisy = 'Coinbase Inc. 8889087930 RTL-848KGJJC WEB ID: 2455293997'
+  assert.match(noisy, /529/)
+  assert.doesNotMatch(tidyDescription(noisy), /529/)
+})
+
+test('a description with nothing to strip is left as it is', () => {
+  assert.equal(tidyDescription('BAY SHORE ISLIP NY 08/25'), 'BAY SHORE ISLIP NY 08/25')
+  assert.equal(tidyDescription(''), '')
+  assert.equal(tidyDescription(null), '')
+})
+
+test('the payee still reaches the rules and the ledger', () => {
+  const { rows } = parseBank(csv(
+    'CREDIT,01/09/2026,"ORIG CO NAME:ACME CORP  CO ENTRY DESCR:PAYROLL  SEC:WEB PPD ID: 9111111101",5000,ACH_CREDIT, ,,',
+  ))
+  assert.equal(rows[0].desc, 'ACME CORP PAYROLL')
+  assert.equal(matchBankRule(rows[0].desc, rulesFor(budget())), 'Wages::Paycheck 1')
 })

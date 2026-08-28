@@ -157,6 +157,30 @@ export function matchBankRule(description, rules) {
 // --- parsing -----------------------------------------------------------------
 
 /**
+ * Strip the ACH plumbing from a payee description.
+ *
+ * A bank description carries routing metadata that says nothing about who was
+ * paid: "ORIG CO NAME:", a trailing "WEB ID: 2455293997", an originator id.
+ * Removing it is not only cosmetic. Those trailing numbers are the reason a
+ * rule of "529", meant for a college fund, matched a crypto purchase whose WEB
+ * ID happened to contain those digits — the plumbing is a field of arbitrary
+ * digits that every short pattern eventually collides with.
+ *
+ * So this runs before rules are matched, not just before display: the text a
+ * rule sees is the text a person would read.
+ */
+export function tidyDescription(raw) {
+  return String(raw || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^ORIG CO NAME:\s*/i, '')
+    .replace(/\s*\b(?:WEB|PPD|CCD|TEL|IND|ORIG|ARC|POP|RCK)\s*ID:\s*\S*/gi, '')
+    .replace(/\s*\bSEC:\s*\S*/gi, '')
+    .replace(/\s*\bCO ENTRY DESCR:\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
  * Read a bank export into signed rows.
  *
  * The sign is the whole classification: a bank writes one Amount column where
@@ -195,7 +219,7 @@ export function parseBank(input) {
       year: Number(iso.slice(0, 4)),
       month: Number(iso.slice(5, 7)) - 1,
       amount: round2(amount),
-      desc: String(at(cells, cols.description) ?? '').replace(/\s+/g, ' ').trim(),
+      desc: tidyDescription(at(cells, cols.description)),
       // Chase's "Type" is a transfer mechanism (ACH_DEBIT), not a spending
       // category. Kept for the ledger, never used to classify.
       type: String(at(cells, cols.category) ?? '').trim(),
