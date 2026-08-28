@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  parseBank, summariseBank, excludedBy, matchBankRule, resolveBankTarget, rulesFor, BANK_SOURCE,
+  parseBank, summariseBank, excludedBy, matchBankRule, resolveBankTarget, rulesFor,
+  signedFor, BANK_SOURCE,
 } from '../src/lib/bank.js'
 import { applySummary } from '../src/lib/statement.js'
 import { emptyData, makeCategory, makeItem } from '../src/lib/model.js'
@@ -223,4 +224,36 @@ test('a card share and a bank share can hold the same month together', () => {
   assert.equal(loan.actual[0], 500, 'the two sources sum')
   assert.equal(loan.imported['0'].amex, 200)
   assert.equal(loan.imported['0'][BANK_SOURCE], 300)
+})
+
+// --- which way the money points ---------------------------------------------
+
+test('a refund reduces the line it was charged to, rather than inflating it', () => {
+  // Money IN landing on an EXPENSE line is a reversal. Taking the magnitude
+  // would record a hotel stay that never happened.
+  assert.equal(signedFor('expense', 415.70), -415.70)
+  assert.equal(signedFor('expense', -415.70), 415.70)
+})
+
+test('money out of an income line counts against that income', () => {
+  assert.equal(signedFor('income', 5000), 5000)
+  assert.equal(signedFor('income', -5000), -5000)
+})
+
+test('a credit aimed at an expense line lands negative end to end', () => {
+  const d = budget()
+  const travel = makeCategory({ kind: 'expense', name: 'Travel', order: 2 }); travel.id = 'c-tr'
+  const hotels = makeItem({ categoryId: 'c-tr', name: 'Hotels', order: 0 }); hotels.id = 'i-hotels'
+  d.categories.push(travel); d.items.push(hotels)
+  d.bankRules = [{ match: 'refundco', target: 'Travel::Hotels' }]
+  const s = run(csv(row('07/15/2026', 'REFUNDCO SAN FRANCISCO CA', 415.70, 'MISC_CREDIT')), d)
+  assert.equal(s.cells.get('i-hotels:6'), -415.70)
+  assert.equal(s.transactions[0].amount, -415.70)
+})
+
+test('the side of the line decides, not the side of the bank row', () => {
+  const d = budget()
+  d.bankRules = [{ match: 'clawback', target: 'Wages::Paycheck 1' }]
+  const s = run(csv(row('04/02/2026', 'CLAWBACK ADJUSTMENT', -300)), d)
+  assert.equal(s.cells.get('i-pay:3'), -300, 'money out of an income line')
 })

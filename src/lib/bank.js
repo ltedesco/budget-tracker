@@ -194,6 +194,27 @@ export function parseBank(input) {
 
 // --- summarising -------------------------------------------------------------
 
+/** Which side of the budget a line sits on. */
+export function kindOfItem(data, itemId) {
+  const item = (data.items || []).find((i) => i.id === itemId)
+  const cat = (data.categories || []).find((c) => c.id === item?.categoryId)
+  return cat?.kind === 'income' ? 'income' : 'expense'
+}
+
+/**
+ * What the line should record, given the direction the money actually moved.
+ *
+ * Money that agrees with the line counts positively — spending on an expense
+ * line, a deposit on an income line. Money that disagrees is a reversal and
+ * counts against it, so a refund lowers the category it was originally
+ * charged to instead of inflating it.
+ */
+export function signedFor(kind, amount) {
+  const magnitude = Math.abs(amount)
+  const agrees = kind === 'income' ? amount > 0 : amount < 0
+  return round2(agrees ? magnitude : -magnitude)
+}
+
 /** A row already accounted for elsewhere in the budget, matched on date and amount. */
 const dupeKey = (iso, amount) => `${iso}|${Math.abs(amount).toFixed(2)}`
 
@@ -288,7 +309,12 @@ export function summariseBank(rows, data, { year, existing = [], source = BANK_S
     if (!itemId) { add(report.unassigned, row.amount); continue }
     add(report.assigned, row.amount)
 
-    const value = Math.abs(row.amount)
+    // The sign depends on which side the line sits on, not on the bank's.
+    // A refund is money IN landing on an EXPENSE line, and it has to reduce
+    // that line rather than add to it — an Airbnb refund is not a hotel stay.
+    // The mirror case is money out of an income line: a clawback or a returned
+    // payment, which reduces income.
+    const value = signedFor(kindOfItem(data, itemId), row.amount)
     const cellKey = `${itemId}:${row.month}`
     cells.set(cellKey, round2((cells.get(cellKey) || 0) + value))
 
