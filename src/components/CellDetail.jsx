@@ -4,6 +4,7 @@ import { MONTHS } from '../lib/model.js'
 import { money } from '../lib/format.js'
 import { ISSUER_LABELS } from '../lib/statement.js'
 import { isManual, MANUAL_SOURCE, monthOfISO } from '../lib/ledger.js'
+import { SOURCE_1099 } from '../lib/tracker1099.js'
 
 const pad = (n) => String(n).padStart(2, '0')
 
@@ -50,6 +51,10 @@ export default function CellDetail({ data, item, category, month, onClose, onAdd
   const rows = (data.transactions || [])
     .filter((t) => t.itemId === item.id && t.month === month)
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.amount - a.amount))
+
+  // Every row read from the 1099 tracker means the advice below should point
+  // at that tracker rather than at a card rule.
+  const onlyFrom1099 = rows.length > 0 && rows.every((t) => t.source === SOURCE_1099)
 
   const total = rows.reduce((a, t) => a + t.amount, 0)
   const recorded = item.actual?.[month]
@@ -132,9 +137,17 @@ export default function CellDetail({ data, item, category, month, onClose, onAdd
             </p>
           )}
 
+          {/* The advice has to match where the figure came from. Telling
+              someone to fix a merchant rule for a 1099 payment sends them
+              looking for a rule that does not exist; the correction for that
+              source belongs in the tracker it was read from. */}
           <p className="small muted">
-            Something in the wrong place? Say which merchant and where it belongs, and the rule
-            can be corrected — then re-import to move every month at once.
+            {onlyFrom1099
+              ? <>Wrong figure? These come from the 1099 tracker, so the correction belongs there —
+                fix the payment in that app, then re-read it on the Setup &amp; Sync tab and this
+                month follows.</>
+              : <>Something in the wrong place? Say which merchant and where it belongs, and the
+                rule can be corrected — then re-import to move every month at once.</>}
           </p>
         </>
       )}
