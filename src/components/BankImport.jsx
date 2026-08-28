@@ -150,6 +150,34 @@ export default function BankImport({ data, actions }) {
             </table>
           </div>
 
+          {/* A number this large cannot just assert itself. Skipping is the
+              right default, but "$99,633 was already recorded" is only
+              trustworthy if you can see what it matched against. */}
+          {r.duplicates.samples.length > 0 && (
+            <div className="table-scroll" style={{ marginTop: 10 }}>
+              <p className="small muted" style={{ margin: '0 0 4px' }}>
+                Matched against entries you already have
+                {r.duplicates.rows > r.duplicates.samples.length &&
+                  ` — first ${r.duplicates.samples.length} of ${r.duplicates.rows}`}:
+              </p>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Date</th><th>From the bank</th><th>Already recorded as</th><th className="num">Amount</th></tr>
+                </thead>
+                <tbody>
+                  {r.duplicates.samples.map((d) => (
+                    <tr key={d.iso + d.amount + d.desc}>
+                      <td className="tiny muted" style={{ whiteSpace: 'nowrap' }}>{d.iso}</td>
+                      <td className="small">{d.desc.slice(0, 46)}</td>
+                      <td className="small muted">{d.matched}</td>
+                      <td className="num">{money(Math.abs(d.amount))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {r.splits.samples.length > 0 && (
             <p className="note" style={{ marginTop: 10 }}>
               {r.splits.samples.map((s) => (

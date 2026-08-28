@@ -318,7 +318,7 @@ export function summariseBank(rows, data, { year, existing = [], source = BANK_S
     const key = dupeKey(row.iso, row.amount)
     if (already.has(key)) {
       add(report.duplicates, row.amount)
-      if (report.duplicates.samples.length < 6) {
+      if (report.duplicates.samples.length < 12) {
         report.duplicates.samples.push({ ...row, matched: already.get(key).desc })
       }
       continue
